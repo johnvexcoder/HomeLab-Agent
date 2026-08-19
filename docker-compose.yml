@@ -1,0 +1,19 @@
+services:
+  homelab-agent:
+    build: .
+    container_name: homelab-agent
+    restart: unless-stopped
+    privileged: false
+    environment:
+      - DASHBOARD_URL=http://192.168.1.31:4000/api
+      - API_KEY=your_api_key_here
+      - POLL_INTERVAL=10000
+      - EVENT_CHECK_INTERVAL=5000
+      - LOG_LEVEL=info
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # For SMART monitoring, add:
+    #   --device /dev/sda:/dev/sda
+    # For Proxmox API access, ensure the agent runs on the Proxmox host directly
