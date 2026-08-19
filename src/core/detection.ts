@@ -14,11 +14,25 @@ function tryExec(cmd: string, timeout = 5000): string {
 }
 
 function detectVmId(): string {
-  // Try QEMU guest agent for Proxmox VMID
+  // Try QEMU guest agent command (if qemu-ga is installed)
   const qgaVmId = tryExec('qemu-ga --get-vmid 2>/dev/null');
   if (qgaVmId && /^\d+$/.test(qgaVmId)) return qgaVmId;
 
-  // Try virtio serial for Proxmox VMID
+  // Try QEMU guest agent via virtio serial port directly
+  try {
+    const qgaPorts = ['/dev/virtio-ports/org.qemu.guest_agent.0', '/dev/virtio-ports/org.qemu.guest_agent.1'];
+    for (const port of qgaPorts) {
+      if (fs.existsSync(port)) {
+        // Send QGA command to get VMID
+        const cmd = `echo '{"execute":"guest-get-vmid"}' > ${port} && timeout 2 cat ${port} 2>/dev/null`;
+        const result = tryExec(cmd);
+        const match = result.match(/"vmid"\s*:\s*(\d+)/);
+        if (match) return match[1];
+      }
+    }
+  } catch {}
+
+  // Try virtio serial for Proxmox VMID (config drive)
   try {
     const virtioPaths = fs.readdirSync('/sys/bus/virtio/devices').filter(d => d.startsWith('virtio'));
     for (const dev of virtioPaths) {
@@ -27,6 +41,10 @@ function detectVmId(): string {
       if (serial && /^\d+$/.test(serial)) return serial;
     }
   } catch {}
+
+  // Try reading from /etc/pve/.vmid (some Proxmox setups)
+  const pveVmid = tryRead('/etc/pve/.vmid');
+  if (pveVmid && /^\d+$/.test(pveVmid)) return pveVmid;
 
   // Try DMI product serial (sometimes contains VMID)
   const productSerial = tryRead('/sys/class/dmi/id/product_serial');
@@ -38,23 +56,32 @@ function detectVmId(): string {
     if (dtVmId && /^\d+$/.test(dtVmId)) return dtVmId;
   } catch {}
 
+  // Try SMBIOS asset tag (sometimes contains VMID)
+  const assetTag = tryRead('/sys/class/dmi/id/chassis_asset_tag');
+  if (assetTag && /^\d+$/.test(assetTag)) return assetTag;
+
   return '';
 }
 
 function detectParentIp(): string {
-  // Default gateway is often the hypervisor
-  const gw = tryExec("ip route show default 2>/dev/null | awk '{print $3}'");
-  if (gw) return gw;
-
-  // Try to get from DHCP lease
+  // For Proxmox VMs: the Proxmox host IP is often the DHCP server or gateway
+  // Try to get from DHCP lease (the DHCP server IP is often the Proxmox host)
   try {
     const dhcpLeases = fs.readdirSync('/var/lib/dhcp').filter(f => f.startsWith('dhclient') && f.endsWith('.leases'));
     for (const lease of dhcpLeases) {
       const content = tryRead(`/var/lib/dhcp/${lease}`);
-      const match = content.match(/option routers ([\d.]+)/);
+      // DHCP server identifier
+      const match = content.match(/server identifier ([\d.]+)/);
       if (match) return match[1];
+      // Fallback: gateway/routers
+      const match2 = content.match(/option routers ([\d.]+)/);
+      if (match2) return match2[1];
     }
   } catch {}
+
+  // Default gateway
+  const gw = tryExec("ip route show default 2>/dev/null | awk '{print $3}'");
+  if (gw) return gw;
 
   return '';
 }
@@ -68,8 +95,11 @@ function detectHostType(): HostType {
   // systemd-detect-virt (most reliable)
   const virt = tryExec('systemd-detect-virt 2>/dev/null');
   if (virt === 'none') {
-    // Could be bare metal OR Proxmox (which reports 'none')
-    if (fs.existsSync('/etc/pve')) return 'hypervisor';
+    // Could be bare metal OR Proxmox host (which reports 'none')
+    // Check for Proxmox-specific paths
+    if (fs.existsSync('/etc/pve') || fs.existsSync('/var/lib/pve-manager') || fs.existsSync('/usr/bin/pveversion')) {
+      return 'hypervisor';
+    }
     return 'bare-metal';
   }
   if (virt === 'proxmox') return 'hypervisor';
