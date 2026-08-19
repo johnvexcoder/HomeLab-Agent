@@ -5,10 +5,11 @@ set -euo pipefail
 # Usage: sudo ./install.sh --dashboard-url http://IP:4000/api --api-key hl_xxxx
 #
 # This script:
-# 1. Detects the OS and installs prerequisites (lm-sensors, vnstat, curl)
+# 1. Detects the OS and installs prerequisites (lm-sensors, vnstat, smartmontools)
 # 2. Installs Node.js 20 if not present
 # 3. Clones (or updates) the agent to /opt/homelab-agent
-# 4. Creates a systemd service that runs as root
+# 4. Builds TypeScript
+# 5. Creates a systemd service that runs as root
 
 INSTALL_DIR="/opt/homelab-agent"
 SERVICE_NAME="homelab-agent"
@@ -33,13 +34,21 @@ if [[ -z "$DASHBOARD_URL" || -z "$API_KEY" ]]; then
 fi
 
 # ── Detect OS ──
+# Proxmox reports ID=debian in /etc/os-release, so we also check for
+# Proxmox-specific files and package manager markers.
 detect_os() {
+  local os_id="unknown"
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release
-    echo "$ID"
-  else
-    echo "unknown"
+    os_id="$ID"
   fi
+
+  # Proxmox detection: /etc/pve exists, or pve-manager is installed, or PRETTY_NAME mentions Proxmox
+  if [[ -d /etc/pve ]] || dpkg -l pve-manager 2>/dev/null | grep -q "^ii" || [[ "${PRETTY_NAME:-}" == *"Proxmox"* ]]; then
+    os_id="proxmox"
+  fi
+
+  echo "$os_id"
 }
 
 OS_ID=$(detect_os)
@@ -50,6 +59,11 @@ install_prereqs() {
   case "$OS_ID" in
     debian|ubuntu|linuxmint|pop)
       echo "[installer] Installing prerequisites via apt..."
+      apt-get update -qq
+      apt-get install -y -qq git curl lm-sensors vnstat smartmontools build-essential
+      ;;
+    proxmox)
+      echo "[installer] Installing prerequisites for Proxmox..."
       apt-get update -qq
       apt-get install -y -qq git curl lm-sensors vnstat smartmontools build-essential
       ;;
@@ -64,11 +78,6 @@ install_prereqs() {
     alpine)
       echo "[installer] Installing prerequisites via apk..."
       apk add --no-cache git curl lm_sensors vnstat smartmontools build-base python3
-      ;;
-    proxmox|pve)
-      echo "[installer] Installing prerequisites for Proxmox..."
-      apt-get update -qq
-      apt-get install -y -qq git curl lm-sensors vnstat smartmontools build-essential
       ;;
     *)
       echo "[installer] Unknown OS ($OS_ID). Attempting apt..."
@@ -93,7 +102,7 @@ install_node() {
 
   echo "[installer] Installing Node.js 20..."
   case "$OS_ID" in
-    debian|ubuntu|linuxmint|pop|proxmox|pve)
+    debian|ubuntu|linuxmint|pop|proxmox)
       curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
       apt-get install -y -qq nodejs
       ;;
@@ -102,7 +111,7 @@ install_node() {
       dnf install -y nodejs
       ;;
     *)
-      # Fallback: use nvm or direct binary
+      # Fallback: direct binary
       local ARCH
       ARCH=$(uname -m)
       case "$ARCH" in
@@ -132,10 +141,14 @@ install_agent() {
     cd "$INSTALL_DIR"
   fi
 
-  echo "[installer] Installing npm dependencies..."
-  npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+  echo "[installer] Installing npm dependencies (including dev for build)..."
+  npm ci 2>/dev/null || npm install
+
   echo "[installer] Building TypeScript..."
-  npx tsc
+  npx -p typescript tsc
+
+  echo "[installer] Pruning dev dependencies..."
+  npm prune --omit=dev
 }
 
 # ── Create systemd service ──
