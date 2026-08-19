@@ -13,6 +13,52 @@ function tryExec(cmd: string, timeout = 5000): string {
   try { return execSync(cmd, { encoding: 'utf-8', timeout, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
 }
 
+function detectVmId(): string {
+  // Try QEMU guest agent for Proxmox VMID
+  const qgaVmId = tryExec('qemu-ga --get-vmid 2>/dev/null');
+  if (qgaVmId && /^\d+$/.test(qgaVmId)) return qgaVmId;
+
+  // Try virtio serial for Proxmox VMID
+  try {
+    const virtioPaths = fs.readdirSync('/sys/bus/virtio/devices').filter(d => d.startsWith('virtio'));
+    for (const dev of virtioPaths) {
+      const serialPath = `/sys/bus/virtio/devices/${dev}/serial`;
+      const serial = tryRead(serialPath);
+      if (serial && /^\d+$/.test(serial)) return serial;
+    }
+  } catch {}
+
+  // Try DMI product serial (sometimes contains VMID)
+  const productSerial = tryRead('/sys/class/dmi/id/product_serial');
+  if (productSerial && /^\d+$/.test(productSerial)) return productSerial;
+
+  // Try /proc/device-tree for VMID (some hypervisors)
+  try {
+    const dtVmId = tryRead('/proc/device-tree/vmid') || tryRead('/proc/device-tree/vm-id');
+    if (dtVmId && /^\d+$/.test(dtVmId)) return dtVmId;
+  } catch {}
+
+  return '';
+}
+
+function detectParentIp(): string {
+  // Default gateway is often the hypervisor
+  const gw = tryExec("ip route show default 2>/dev/null | awk '{print $3}'");
+  if (gw) return gw;
+
+  // Try to get from DHCP lease
+  try {
+    const dhcpLeases = fs.readdirSync('/var/lib/dhcp').filter(f => f.startsWith('dhclient') && f.endsWith('.leases'));
+    for (const lease of dhcpLeases) {
+      const content = tryRead(`/var/lib/dhcp/${lease}`);
+      const match = content.match(/option routers ([\d.]+)/);
+      if (match) return match[1];
+    }
+  } catch {}
+
+  return '';
+}
+
 function detectHostType(): HostType {
   // Container detection
   if (fs.existsSync('/.dockerenv')) return 'container';
@@ -119,9 +165,12 @@ export async function detectHost(hostId: string, hostName: string): Promise<Host
 
   const hostType = detectHostType();
   const hypervisor = detectHypervisor();
+  const virtType = tryExec('systemd-detect-virt 2>/dev/null') || '';
   const platform = detectPlatform();
   const { os: osName, osId, osVersion } = getOsInfo();
   const machineId = getMachineId();
+  const vmId = detectVmId();
+  const parentIp = detectParentIp();
 
   // DMI data
   const manufacturer = tryRead('/sys/class/dmi/id/board_vendor') || tryRead('/sys/class/dmi/id/sys_vendor');
@@ -142,18 +191,21 @@ export async function detectHost(hostId: string, hostName: string): Promise<Host
     arch: os.arch(),
     hostType,
     hypervisor,
+    virtType,
     platform,
     manufacturer,
     product,
     bios,
     uptimeSeconds: Math.floor(os.uptime()),
+    vmId: vmId || undefined,
+    parentIp: parentIp || undefined,
   };
 
   log.info('detect', `OS: ${info.os} (${info.osId})`);
-  log.info('detect', `Type: ${info.hostType} | Platform: ${info.platform} | Hypervisor: ${info.hypervisor || 'none'}`);
+  log.info('detect', `Type: ${info.hostType} | Platform: ${info.platform} | Hypervisor: ${info.hypervisor || 'none'} | Virt: ${info.virtType || 'none'}`);
   log.info('detect', `Kernel: ${info.kernel} | Arch: ${info.arch}`);
   log.info('detect', `Host: ${info.hostName} (${info.hostId})`);
-  log.info('detect', `IP: ${info.ip} | MAC: ${info.mac}`);
+  log.info('detect', `IP: ${info.ip} | MAC: ${info.mac} | VMID: ${info.vmId || 'none'} | ParentIP: ${info.parentIp || 'none'}`);
 
   return info;
 }

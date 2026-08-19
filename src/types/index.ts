@@ -50,6 +50,12 @@ export interface HostInfo {
   product: string;
   bios: string;
   uptimeSeconds: number;
+  /** If running in a VM, the VM identifier (e.g., Proxmox VMID) */
+  vmId?: string;
+  /** If running in a VM, the hypervisor/parent IP */
+  parentIp?: string;
+  /** Hypervisor type as detected by systemd-detect-virt */
+  virtType?: string;
 }
 
 export interface PluginData {
