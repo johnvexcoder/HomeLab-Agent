@@ -150,6 +150,7 @@ function getMacAddress(): string {
 }
 
 function getLocalIp(): string {
+  // Strategy 1: Node.js os.networkInterfaces()
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
     if (name === 'lo' || name === 'docker0' || name.startsWith('br-') || name.startsWith('veth')) continue;
@@ -159,6 +160,22 @@ function getLocalIp(): string {
       if (addr.family === 'IPv4' && !addr.internal) return addr.address;
     }
   }
+
+  // Strategy 2: ip route get 1.1.1.1 (most reliable)
+  const ipRoute = tryExec("ip route get 1.1.1.1 2>/dev/null | head -1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'");
+  if (ipRoute && /^\d+\.\d+\.\d+\.\d+$/.test(ipRoute)) return ipRoute;
+
+  // Strategy 3: hostname -I (returns all IPs, take first)
+  const hostIps = tryExec('hostname -I 2>/dev/null');
+  if (hostIps) {
+    const first = hostIps.split(/\s+/)[0];
+    if (first && /^\d+\.\d+\.\d+\.\d+$/.test(first) && first !== '127.0.0.1') return first;
+  }
+
+  // Strategy 4: ip -4 addr (parse manually)
+  const ipAddr = tryExec("ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | head -1");
+  if (ipAddr && /^\d+\.\d+\.\d+\.\d+$/.test(ipAddr)) return ipAddr;
+
   return '127.0.0.1';
 }
 
