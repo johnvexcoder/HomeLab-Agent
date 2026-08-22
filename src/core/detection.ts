@@ -153,7 +153,7 @@ function getLocalIp(): string {
   // Strategy 1: Node.js os.networkInterfaces()
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
-    if (name === 'lo' || name === 'docker0' || name.startsWith('br-') || name.startsWith('veth')) continue;
+    if (name === 'lo' || name === 'docker0' || name.startsWith('br-') || name.startsWith('veth') || name.startsWith('pan')) continue;
     const addrs = ifaces[name];
     if (!addrs) continue;
     for (const addr of addrs) {
