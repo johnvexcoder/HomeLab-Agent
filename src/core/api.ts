@@ -13,7 +13,7 @@ function postJson(
   url: string,
   headers: Record<string, string>,
   body: unknown,
-  timeoutMs = 10_000,
+  timeoutMs = 30_000,
 ): Promise<{ ok: boolean; status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -21,6 +21,7 @@ function postJson(
     const mod = isHttps ? https : http;
 
     const payload = JSON.stringify(body);
+    const payloadBytes = Buffer.byteLength(payload);
 
     const req = mod.request(
       parsed,
@@ -29,7 +30,7 @@ function postJson(
         headers: {
           ...headers,
           'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
+          'Content-Length': payloadBytes,
         },
         timeout: timeoutMs,
       },
@@ -42,7 +43,10 @@ function postJson(
       },
     );
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      log.error('api', `HTTP error for ${parsed.pathname}: ${(err as Error).message} (body=${payloadBytes}b)`);
+      reject(err);
+    });
     req.on('timeout', () => {
       req.destroy(new Error('Request timed out'));
     });
