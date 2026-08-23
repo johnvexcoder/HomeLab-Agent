@@ -31,8 +31,10 @@ function postJson(
           ...headers,
           'Content-Type': 'application/json',
           'Content-Length': payloadBytes,
+          'Connection': 'close',
         },
         timeout: timeoutMs,
+        agent: false,
       },
       (res) => {
         let data = '';
