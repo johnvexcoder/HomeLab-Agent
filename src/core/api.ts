@@ -1,6 +1,56 @@
+import http from 'node:http';
+import https from 'node:https';
 import type { AgentConfig } from './config.js';
 import type { AgentReport, AgentEvent } from '../types/index.js';
 import { log } from './logger.js';
+
+/**
+ * POST JSON to the backend using Node.js http/https module.
+ * Undici's fetch() hangs on some Node.js 20 builds (e.g. pve0),
+ * so we use the classic http module which is battle-tested.
+ */
+function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  timeoutMs = 10_000,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const isHttps = parsed.protocol === 'https:';
+    const mod = isHttps ? https : http;
+
+    const payload = JSON.stringify(body);
+
+    const req = mod.request(
+      parsed,
+      {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk; });
+        res.on('end', () => {
+          resolve({ ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode ?? 0, body: data });
+        });
+      },
+    );
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error('Request timed out'));
+    });
+
+    req.write(payload);
+    req.end();
+  });
+}
 
 export async function registerAgent(
   config: AgentConfig,
@@ -8,34 +58,28 @@ export async function registerAgent(
 ): Promise<boolean> {
   const url = `${config.dashboardUrl}/agent/register`;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Agent-Key': config.apiKey,
-        'X-Agent-Version': report.agentVersion,
-      },
-      body: JSON.stringify({
-        hostId: report.hostInfo.hostId,
-        hostName: report.hostInfo.hostName,
-        ip: report.hostInfo.ip,
-        os: report.hostInfo.os,
-        osId: report.hostInfo.osId,
-        kernel: report.hostInfo.kernel,
-        arch: report.hostInfo.arch,
-        hostType: report.hostInfo.hostType,
-        hypervisor: report.hostInfo.hypervisor,
-        platform: report.hostInfo.platform,
-        manufacturer: report.hostInfo.manufacturer,
-        product: report.hostInfo.product,
-        machineId: report.hostInfo.machineId,
-        capabilities: report.capabilities,
-        plugins: report.plugins.map((p) => p.plugin),
-      }),
+    const res = await postJson(url, {
+      'X-Agent-Key': config.apiKey,
+      'X-Agent-Version': report.agentVersion,
+    }, {
+      hostId: report.hostInfo.hostId,
+      hostName: report.hostInfo.hostName,
+      ip: report.hostInfo.ip,
+      os: report.hostInfo.os,
+      osId: report.hostInfo.osId,
+      kernel: report.hostInfo.kernel,
+      arch: report.hostInfo.arch,
+      hostType: report.hostInfo.hostType,
+      hypervisor: report.hostInfo.hypervisor,
+      platform: report.hostInfo.platform,
+      manufacturer: report.hostInfo.manufacturer,
+      product: report.hostInfo.product,
+      machineId: report.hostInfo.machineId,
+      capabilities: report.capabilities,
+      plugins: report.plugins.map((p) => p.plugin),
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      log.error('api', `Register failed ${res.status}: ${text}`);
+      log.error('api', `Register failed ${res.status}: ${res.body}`);
       return false;
     }
     log.info('api', 'Registered with dashboard');
@@ -52,18 +96,12 @@ export async function reportMetrics(
 ): Promise<boolean> {
   const url = `${config.dashboardUrl}/agent/report`;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Agent-Key': config.apiKey,
-        'X-Agent-Version': report.agentVersion,
-      },
-      body: JSON.stringify(report),
-    });
+    const res = await postJson(url, {
+      'X-Agent-Key': config.apiKey,
+      'X-Agent-Version': report.agentVersion,
+    }, report);
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      log.error('api', `Report failed ${res.status}: ${text}`);
+      log.error('api', `Report failed ${res.status}: ${res.body}`);
       return false;
     }
     return true;
@@ -81,14 +119,9 @@ export async function reportEvents(
   if (events.length === 0) return true;
   const url = `${config.dashboardUrl}/agent/events`;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Agent-Key': config.apiKey,
-      },
-      body: JSON.stringify({ hostId, events }),
-    });
+    const res = await postJson(url, {
+      'X-Agent-Key': config.apiKey,
+    }, { hostId, events });
     return res.ok;
   } catch {
     return false;
