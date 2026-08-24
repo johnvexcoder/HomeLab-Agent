@@ -11,8 +11,8 @@ export interface AgentConfig {
 }
 
 const DEFAULTS: Partial<AgentConfig> = {
-  pollInterval: 10_000,
-  eventCheckInterval: 5_000,
+  pollInterval: 2_000,
+  eventCheckInterval: 1_000,
   hostId: '',
   hostName: '',
   dockerSocket: '/var/run/docker.sock',

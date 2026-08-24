@@ -44,8 +44,8 @@ export class DockerPlugin extends Plugin {
     version: '1.0.0',
     capabilities: ['containers', 'images', 'compose_projects'],
     platform: 'linux',
-    recommendedPollMs: 5000,
-    recommendedEventMs: 5000,
+    recommendedPollMs: 1000,
+    recommendedEventMs: 1000,
   };
 
   private docker: any = null;
@@ -139,9 +139,8 @@ export class DockerPlugin extends Plugin {
     if (!this.docker) return [];
     try {
       const raw = await this.docker.listContainers({ all: true });
-      const snapshots: ContainerSnapshot[] = [];
 
-      for (const c of raw) {
+      const tasks = raw.map(async (c: any) => {
         const name = (c.Names[0] ?? '').replace(/^\//, '');
         const snapshot: ContainerSnapshot = {
           id: c.Id.slice(0, 12),
@@ -166,42 +165,50 @@ export class DockerPlugin extends Plugin {
           composeService: c.Labels?.['com.docker.compose.service'] ?? '',
         };
 
-        // Get detailed stats for running containers
+        // Parallel stats collection with a fast 1s timeout
         if (c.State === 'running') {
           try {
             const container = this.docker.getContainer(c.Id);
-            const inspect = await container.inspect();
-            snapshot.health = inspect.State?.Health?.Status ?? 'none';
-            snapshot.restartCount = inspect.RestartCount ?? 0;
+            const statsPromise = (async () => {
+              const inspect = await container.inspect();
+              snapshot.health = inspect.State?.Health?.Status ?? 'none';
+              snapshot.restartCount = inspect.RestartCount ?? 0;
 
-            const stats = await container.stats({ stream: false });
-            const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats.cpu_usage.total_usage ?? 0);
-            const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats.system_cpu_usage ?? 0);
-            const cpuCount = stats.cpu_stats.online_cpus ?? 1;
-            snapshot.cpuPercent = systemDelta > 0 ? (cpuDelta / systemDelta) * cpuCount * 100 : 0;
+              const stats = await container.stats({ stream: false });
+              const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats.cpu_usage.total_usage ?? 0);
+              const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats.system_cpu_usage ?? 0);
+              const cpuCount = stats.cpu_stats.online_cpus ?? 1;
+              snapshot.cpuPercent = systemDelta > 0 ? (cpuDelta / systemDelta) * cpuCount * 100 : 0;
 
-            const memUsage = stats.memory_stats.usage ?? 0;
-            const memCache = stats.memory_stats.stats?.cache ?? 0;
-            snapshot.memUsageMb = Math.round((memUsage - memCache) / 1e6);
-            snapshot.memLimitMb = Math.round((stats.memory_stats.limit ?? 0) / 1e6);
-            snapshot.memPercent = stats.memory_stats.limit
-              ? ((memUsage - memCache) / stats.memory_stats.limit) * 100
-              : 0;
+              const memUsage = stats.memory_stats.usage ?? 0;
+              const memCache = stats.memory_stats.stats?.cache ?? 0;
+              snapshot.memUsageMb = Math.round((memUsage - memCache) / 1e6);
+              snapshot.memLimitMb = Math.round((stats.memory_stats.limit ?? 0) / 1e6);
+              snapshot.memPercent = stats.memory_stats.limit
+                ? ((memUsage - memCache) / stats.memory_stats.limit) * 100
+                : 0;
 
-            const networks = stats.networks ?? {};
-            for (const net of Object.values(networks) as any[]) {
-              snapshot.netRxMb += (net.rx_bytes ?? 0) / 1e6;
-              snapshot.netTxMb += (net.tx_bytes ?? 0) / 1e6;
-            }
-            snapshot.pids = stats.pids_stats?.current ?? 0;
+              const networks = stats.networks ?? {};
+              for (const net of Object.values(networks) as any[]) {
+                snapshot.netRxMb += (net.rx_bytes ?? 0) / 1e6;
+                snapshot.netTxMb += (net.tx_bytes ?? 0) / 1e6;
+              }
+              snapshot.pids = stats.pids_stats?.current ?? 0;
+            })();
+
+            await Promise.race([
+              statsPromise,
+              new Promise((resolve) => setTimeout(resolve, 1000)),
+            ]);
           } catch {
             // Stats unavailable
           }
         }
 
-        snapshots.push(snapshot);
-      }
-      return snapshots;
+        return snapshot;
+      });
+
+      return await Promise.all(tasks);
     } catch (err) {
       log.error('docker', `Failed to list containers: ${(err as Error).message}`);
       return [];
