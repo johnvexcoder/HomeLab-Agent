@@ -1,3 +1,4 @@
+import { hostPath } from "../../core/host.js";
 import os from 'node:os';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -11,7 +12,7 @@ function tryExec(cmd: string, timeout = 5000): string {
 }
 
 function tryRead(p: string): string {
-  try { return fs.readFileSync(p, 'utf-8').trim(); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(p), 'utf-8').trim(); } catch { return ''; }
 }
 
 function round(n: number, d: number): number {
@@ -22,6 +23,8 @@ function round(n: number, d: number): number {
 let prevRx = 0;
 let prevTx = 0;
 let prevTs = Date.now();
+
+const ifacePrev = new Map<string, { rx: number; tx: number; ts: number }>();
 
 interface NetworkInterface {
   name: string;
@@ -117,11 +120,20 @@ export class NetworkPlugin extends Plugin {
       // Calculate throughput
       const counters = this.readIfaceCounters(name);
       const now = Date.now();
-      const elapsed = Math.max((now - prevTs) / 1000, 0.5);
-      const downMbps = prevRx > 0 ? round(((counters.rxBytes - prevRx) * 8 / elapsed) / 1e6, 1) : 0;
-      const upMbps = prevTx > 0 ? round(((counters.txBytes - prevTx) * 8 / elapsed) / 1e6, 1) : 0;
+      
+      const prev = ifacePrev.get(name);
+      let downMbps = 0;
+      let upMbps = 0;
+      
+      if (prev) {
+        const elapsed = Math.max((now - prev.ts) / 1000, 0.5);
+        downMbps = round(((counters.rxBytes - prev.rx) * 8 / elapsed) / 1e6, 1);
+        upMbps = round(((counters.txBytes - prev.tx) * 8 / elapsed) / 1e6, 1);
+      }
+      
+      ifacePrev.set(name, { rx: counters.rxBytes, tx: counters.txBytes, ts: now });
 
-      ifaces.push({ name, ip, mac, speed, duplex, state, mtu, downMbps, upMbps });
+      ifaces.push({ name, ip, mac, speed, duplex, state, mtu, downMbps: Math.max(0, downMbps), upMbps: Math.max(0, upMbps) });
     }
 
     // Update global counters

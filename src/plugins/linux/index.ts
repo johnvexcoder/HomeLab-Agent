@@ -1,3 +1,4 @@
+import { hostPath } from "../../core/host.js";
 import os from 'node:os';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -14,7 +15,7 @@ let prevNetTx = 0;
 let prevNetTs = Date.now();
 
 function tryRead(p: string): string {
-  try { return fs.readFileSync(p, 'utf-8'); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch { return ''; }
 }
 
 function tryExec(cmd: string): string {
@@ -154,7 +155,7 @@ function readFilesystems(): Array<{ mount: string; device: string; totalGb: numb
 
 function getProcessCount(): number {
   try {
-    return fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).length;
+    return fs.readdirSync(hostPath('/proc')).filter((d) => /^\d+$/.test(d)).length;
   } catch {
     return 0;
   }

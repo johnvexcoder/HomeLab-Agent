@@ -8,6 +8,7 @@ export interface AgentConfig {
   dockerSocket: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   maxEventsPerReport: number;
+  hostRoot: string;
 }
 
 const DEFAULTS: Partial<AgentConfig> = {
@@ -18,6 +19,7 @@ const DEFAULTS: Partial<AgentConfig> = {
   dockerSocket: '/var/run/docker.sock',
   logLevel: 'info',
   maxEventsPerReport: 50,
+  hostRoot: '/',
 };
 
 export function loadConfig(): AgentConfig {
@@ -43,6 +45,7 @@ export function loadConfig(): AgentConfig {
     dockerSocket: env('DOCKER_SOCKET') || DEFAULTS.dockerSocket!,
     logLevel: (env('LOG_LEVEL') || DEFAULTS.logLevel!) as AgentConfig['logLevel'],
     maxEventsPerReport: num('MAX_EVENTS_PER_REPORT', DEFAULTS.maxEventsPerReport!),
+    hostRoot: env('HOST_ROOT') || DEFAULTS.hostRoot!,
   };
 }
 

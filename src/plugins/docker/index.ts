@@ -1,3 +1,4 @@
+import { hostPath } from "../../core/host.js";
 import fs from 'node:fs';
 import { Plugin } from '../../core/plugin.js';
 import { observeState } from '../../core/event-engine.js';
@@ -53,7 +54,7 @@ export class DockerPlugin extends Plugin {
 
   async detect(): Promise<boolean> {
     // Check if Docker socket exists
-    if (!fs.existsSync(this.ctx.dockerSocket)) {
+    if (!fs.existsSync(hostPath(this.ctx.dockerSocket))) {
       return false;
     }
     if (!Docker) {

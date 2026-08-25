@@ -1,3 +1,4 @@
+import { hostPath } from "../../core/host.js";
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { Plugin } from '../../core/plugin.js';
@@ -35,7 +36,7 @@ import type { PluginMeta, AgentEvent, CollectedMetrics } from '../../types/index
  */
 
 function tryRead(p: string): string {
-  try { return fs.readFileSync(p, 'utf-8'); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch { return ''; }
 }
 
 function tryExec(cmd: string, timeout = 10000): string {
@@ -49,7 +50,7 @@ function round(n: number, d: number): number {
 
 /** Detect Proxmox VE environment. */
 function isProxmox(): boolean {
-  if (fs.existsSync('/etc/pve')) {
+  if (fs.existsSync(hostPath('/etc/pve'))) {
     const osRelease = tryRead('/etc/os-release');
     if (osRelease.includes('Proxmox') || osRelease.includes('pve-manager')) return true;
   }
@@ -64,7 +65,7 @@ function readNodeTemperatures(): Array<{ label: string; valueC: number }> {
 
   // Thermal zones
   try {
-    const zones = fs.readdirSync('/sys/class/thermal').filter((d) => d.startsWith('thermal_zone'));
+    const zones = fs.readdirSync(hostPath('/sys/class/thermal')).filter((d) => d.startsWith('thermal_zone'));
     for (const zone of zones) {
       const type = tryRead(`/sys/class/thermal/${zone}/type`) || zone;
       const tempRaw = tryRead(`/sys/class/thermal/${zone}/temp`);
@@ -77,7 +78,7 @@ function readNodeTemperatures(): Array<{ label: string; valueC: number }> {
 
   // hwmon
   try {
-    const hwmons = fs.readdirSync('/sys/class/hwmon');
+    const hwmons = fs.readdirSync(hostPath('/sys/class/hwmon'));
     for (const h of hwmons) {
       const name = tryRead(`/sys/class/hwmon/${h}/name`) || h;
       for (let i = 1; i <= 20; i++) {
@@ -98,7 +99,7 @@ function readNodeTemperatures(): Array<{ label: string; valueC: number }> {
 function readNodeFans(): Array<{ label: string; rpm: number }> {
   const fans: Array<{ label: string; rpm: number }> = [];
   try {
-    const hwmons = fs.readdirSync('/sys/class/hwmon');
+    const hwmons = fs.readdirSync(hostPath('/sys/class/hwmon'));
     for (const h of hwmons) {
       const name = tryRead(`/sys/class/hwmon/${h}/name`) || h;
       for (let i = 1; i <= 10; i++) {
