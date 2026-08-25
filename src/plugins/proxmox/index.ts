@@ -1,6 +1,8 @@
 import { hostPath } from "../../core/host.js";
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+const execAsync = promisify(exec);
 import { Plugin } from '../../core/plugin.js';
 import { observeState } from '../../core/event-engine.js';
 import { log } from '../../core/logger.js';
@@ -39,8 +41,14 @@ function tryRead(p: string): string {
   try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch { return ''; }
 }
 
-function tryExec(cmd: string, timeout = 10000): string {
-  try { return execSync(cmd, { encoding: 'utf-8', timeout, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
+async function tryExec(cmd: string, timeout = 10000): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout });
+    return stdout.trim();
+  } catch (err: any) {
+    log.warn('proxmox', `tryExec failed for "${cmd}": ${err.message}`);
+    return '';
+  }
 }
 
 function round(n: number, d: number): number {
@@ -49,12 +57,12 @@ function round(n: number, d: number): number {
 }
 
 /** Detect Proxmox VE environment. */
-function isProxmox(): boolean {
+async function isProxmox(): Promise<boolean> {
   if (fs.existsSync(hostPath('/etc/pve'))) {
     const osRelease = tryRead('/etc/os-release');
     if (osRelease.includes('Proxmox') || osRelease.includes('pve-manager')) return true;
   }
-  const pveshCheck = tryExec('which pvesh 2>/dev/null');
+  const pveshCheck = await tryExec('which pvesh 2>/dev/null');
   if (pveshCheck.includes('pvesh')) return true;
   return false;
 }
@@ -142,27 +150,31 @@ function readHardwareInventory(): Record<string, string> {
 }
 
 /** Read ZFS pool health (local node only). */
-function readZfsHealth(): Array<{ name: string; sizeGb: number; usedGb: number; health: string; fragPercent: number; errors: number }> {
-  const pools = tryExec('zpool list -Hp 2>/dev/null');
+async function readZfsHealth(): Promise<Array<{ name: string; sizeGb: number; usedGb: number; health: string; fragPercent: number; errors: number }>> {
+  const pools = await tryExec('zpool list -Hp 2>/dev/null');
   if (!pools) return [];
-  return pools.split('\n').filter(Boolean).map((line) => {
+  const lines = pools.split('\n').filter(Boolean);
+  const results = [];
+  for (const line of lines) {
+
     const parts = line.split(/\s+/);
     // Count errors
-    const errOut = tryExec(`zpool status ${parts[0]} 2>/dev/null | grep -c "errors:"`);
-    return {
+    const errOut = await tryExec(`zpool status ${parts[0]} 2>/dev/null | grep -c "errors:"`);
+    results.push({
       name: parts[0] ?? '',
       sizeGb: round(Number(parts[1]) || 0, 2),
       usedGb: round(Number(parts[2]) || 0, 2),
       health: parts[8] ?? 'UNKNOWN',
       fragPercent: Number(parts[7]) || 0,
       errors: Number(errOut) || 0,
-    };
-  });
+    });
+  }
+  return results;
 }
 
 /** Read Ceph health (local node). */
-function readCephHealth(): { active: boolean; health: string; osdCount: number; pgStatus: string } {
-  const status = tryExec('ceph status --format json 2>/dev/null');
+async function readCephHealth(): Promise< { active: boolean; health: string; osdCount: number; pgStatus: string }> {
+  const status = await tryExec('ceph status --format json 2>/dev/null');
   if (!status) return { active: false, health: 'unknown', osdCount: 0, pgStatus: 'unknown' };
   try {
     const parsed = JSON.parse(status);
@@ -178,20 +190,20 @@ function readCephHealth(): { active: boolean; health: string; osdCount: number; 
 }
 
 /** Read UPS information from NUT/UPS monitoring. */
-function readUpsInfo(): { connected: boolean; model: string; status: string; batteryPercent: number; loadPercent: number; runtimeSec: number } {
+async function readUpsInfo(): Promise< { connected: boolean; model: string; status: string; batteryPercent: number; loadPercent: number; runtimeSec: number }> {
   // Try upsc (Network UPS Tools)
-  const upscPath = tryExec('which upsc 2>/dev/null');
+  const upscPath = await tryExec('which upsc 2>/dev/null');
   if (!upscPath) return { connected: false, model: '', status: '', batteryPercent: 0, loadPercent: 0, runtimeSec: 0 };
 
-  const deviceList = tryExec('upsc -l 2>/dev/null');
+  const deviceList = await tryExec('upsc -l 2>/dev/null');
   const device = deviceList.split('\n')[0]?.trim();
   if (!device) return { connected: false, model: '', status: '', batteryPercent: 0, loadPercent: 0, runtimeSec: 0 };
 
-  const model = tryExec(`upsc ${device} device.model 2>/dev/null`);
-  const status = tryExec(`upsc ${device} ups.status 2>/dev/null`);
-  const battery = Number(tryExec(`upsc ${device} battery.charge 2>/dev/null`)) || 0;
-  const load = Number(tryExec(`upsc ${device} ups.load 2>/dev/null`)) || 0;
-  const runtime = Number(tryExec(`upsc ${device} battery.runtime 2>/dev/null`)) || 0;
+  const model = await tryExec(`upsc ${device} device.model 2>/dev/null`);
+  const status = await tryExec(`upsc ${device} ups.status 2>/dev/null`);
+  const battery = Number(await tryExec(`upsc ${device} battery.charge 2>/dev/null`)) || 0;
+  const load = Number(await tryExec(`upsc ${device} ups.load 2>/dev/null`)) || 0;
+  const runtime = Number(await tryExec(`upsc ${device} battery.runtime 2>/dev/null`)) || 0;
 
   return {
     connected: true,
@@ -223,12 +235,12 @@ export class ProxmoxPlugin extends Plugin {
     const temps = readNodeTemperatures();
     const fans = readNodeFans();
     const hw = readHardwareInventory();
-    const zfs = readZfsHealth();
-    const ceph = readCephHealth();
-    const ups = readUpsInfo();
+    const zfs = await readZfsHealth();
+    const ceph = await readCephHealth();
+    const ups = await readUpsInfo();
 
     // Read PVE node status for basic node info (CPU, mem, uptime — NOT VMs)
-    const nodeStatus = this.collectNodeStatus();
+    const nodeStatus = await this.collectNodeStatus();
 
     return {
       node: nodeStatus,
@@ -269,7 +281,7 @@ export class ProxmoxPlugin extends Plugin {
     }
 
     // ZFS health events
-    const zfs = readZfsHealth();
+    const zfs = await readZfsHealth();
     for (const pool of zfs) {
       if (pool.health !== 'ONLINE') {
         const evt = observeState('proxmox', `zfs:${pool.name}`, pool.health, 'critical',
@@ -284,7 +296,7 @@ export class ProxmoxPlugin extends Plugin {
     }
 
     // Ceph health events
-    const ceph = readCephHealth();
+    const ceph = await readCephHealth();
     if (ceph.active && ceph.health !== 'HEALTH_OK') {
       const evt = observeState('proxmox', 'ceph_health', ceph.health,
         ceph.health === 'HEALTH_WARN' ? 'warning' : 'critical',
@@ -293,7 +305,7 @@ export class ProxmoxPlugin extends Plugin {
     }
 
     // UPS events
-    const ups = readUpsInfo();
+    const ups = await readUpsInfo();
     if (ups.connected) {
       if (ups.batteryPercent < 30) {
         const evt = observeState('proxmox', 'ups_battery', 'low', 'critical',
@@ -314,19 +326,19 @@ export class ProxmoxPlugin extends Plugin {
    * Read basic PVE node status (CPU, memory, uptime).
    * This is node-local telemetry — NOT VM/LXC inventory.
    */
-  private collectNodeStatus(): Record<string, unknown> {
+  private async collectNodeStatus(): Promise<Record<string, unknown>> {
     try {
-      const node = tryExec('/usr/sbin/pvesh get /nodes/$(hostname) --noheader --output-format json 2>/dev/null');
+      const node = await tryExec('/usr/sbin/pvesh get /nodes/$(hostname) --noheader --output-format json 2>/dev/null');
       const parsed = node ? JSON.parse(node) : null;
       const data = parsed?.data ?? parsed;
       if (!data) return {};
 
-      const cpuinfo = tryExec('/usr/sbin/pvesh get /nodes/$(hostname)/cpuinfo --output-format json 2>/dev/null');
+      const cpuinfo = await tryExec('/usr/sbin/pvesh get /nodes/$(hostname)/cpuinfo --output-format json 2>/dev/null');
       const cpuinfoParsed = cpuinfo ? JSON.parse(cpuinfo) : null;
       const cpuData = cpuinfoParsed?.data ?? cpuinfoParsed;
 
       return {
-        name: tryExec('hostname'),
+        name: await tryExec('hostname'),
         status: data.status ?? 'unknown',
         cpuPercent: data.cpu ?? 0,
         cpuCores: cpuData?.cores ?? 0,

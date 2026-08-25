@@ -29,6 +29,7 @@ interface ContainerSnapshot {
   startedAt: string;
   composeProject: string;
   composeService: string;
+  statsAvailable: boolean;
 }
 
 interface ComposeProject {
@@ -164,18 +165,20 @@ export class DockerPlugin extends Plugin {
           startedAt: c.Created ? new Date(c.Created * 1000).toISOString() : '',
           composeProject: c.Labels?.['com.docker.compose.project'] ?? '',
           composeService: c.Labels?.['com.docker.compose.service'] ?? '',
+          statsAvailable: false,
         };
 
         // Parallel stats collection with a fast 1s timeout
         if (c.State === 'running') {
           try {
             const container = this.docker.getContainer(c.Id);
+            const ac = new AbortController();
             const statsPromise = (async () => {
-              const inspect = await container.inspect();
+              const inspect = await container.inspect({ abortSignal: ac.signal });
               snapshot.health = inspect.State?.Health?.Status ?? 'none';
               snapshot.restartCount = inspect.RestartCount ?? 0;
 
-              const stats = await container.stats({ stream: false });
+              const stats = await container.stats({ stream: false, abortSignal: ac.signal });
               const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats.cpu_usage.total_usage ?? 0);
               const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats.system_cpu_usage ?? 0);
               const cpuCount = stats.cpu_stats.online_cpus ?? 1;
@@ -195,14 +198,18 @@ export class DockerPlugin extends Plugin {
                 snapshot.netTxMb += (net.tx_bytes ?? 0) / 1e6;
               }
               snapshot.pids = stats.pids_stats?.current ?? 0;
+              snapshot.statsAvailable = true;
             })();
 
             await Promise.race([
               statsPromise,
-              new Promise((resolve) => setTimeout(resolve, 1000)),
+              new Promise((_, reject) => setTimeout(() => {
+                ac.abort();
+                reject(new Error('timeout'));
+              }, 1000)),
             ]);
           } catch {
-            // Stats unavailable
+            // Stats unavailable or timeout
           }
         }
 

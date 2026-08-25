@@ -1,12 +1,20 @@
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+const execAsync = promisify(exec);
 import { Plugin } from '../../core/plugin.js';
 import { observeState } from '../../core/event-engine.js';
 import { log } from '../../core/logger.js';
 import type { PluginMeta, AgentEvent, CollectedMetrics } from '../../types/index.js';
 
-function tryExec(cmd: string, timeout = 10000): string {
-  try { return execSync(cmd, { encoding: 'utf-8', timeout, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
+async function tryExec(cmd: string, timeout = 10000): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout });
+    return stdout.trim();
+  } catch (err: any) {
+    log.warn('smart', `tryExec failed for "${cmd}": ${err.message}`);
+    return '';
+  }
 }
 
 function round(n: number, d: number): number {
@@ -45,27 +53,27 @@ export class SmartPlugin extends Plugin {
 
   async detect(): Promise<boolean> {
     // Check if smartctl is available
-    const which = tryExec('which smartctl 2>/dev/null');
+    const which = await tryExec('which smartctl 2>/dev/null');
     if (!which) return false;
 
     // Check if there are any drives
-    const drives = this.findDrives();
+    const drives = await this.findDrives();
     return drives.length > 0;
   }
 
   async collect(): Promise<CollectedMetrics> {
-    const drives = this.collectDrives();
+    const drives = await this.collectDrives();
     return {
       drives,
       driveCount: drives.length,
       healthyCount: drives.filter((d) => d.health === 'PASSED' || d.health === 'OK').length,
-      failingCount: drives.filter((d) => d.health !== 'PASSED' && d.health !== 'OK').length,
+      failingCount: drives.filter((d) => d.health === 'FAILED').length,
     };
   }
 
   async checkEvents(): Promise<AgentEvent[]> {
     const events: AgentEvent[] = [];
-    const drives = this.collectDrives();
+    const drives = await this.collectDrives();
 
     for (const drive of drives) {
       // Health change
@@ -94,22 +102,22 @@ export class SmartPlugin extends Plugin {
     return events;
   }
 
-  private findDrives(): string[] {
+  private async findDrives(): Promise<string[]> {
     // Use lsblk to find block devices
-    const out = tryExec('lsblk -d -n -o NAME,TYPE 2>/dev/null');
+    const out = await tryExec('lsblk -d -n -o NAME,TYPE 2>/dev/null');
     if (!out) return [];
     return out.split('\n')
       .filter((l) => l.includes('disk'))
       .map((l) => `/dev/${l.split(/\s+/)[0]}`);
   }
 
-  private collectDrives(): SmartDrive[] {
-    const devices = this.findDrives();
+  private async collectDrives(): Promise<SmartDrive[]> {
+    const devices = await this.findDrives();
     const drives: SmartDrive[] = [];
 
     for (const device of devices) {
       try {
-        const drive = this.collectDrive(device);
+        const drive = await this.collectDrive(device);
         if (drive) drives.push(drive);
       } catch (err) {
         log.debug('smart', `Failed to read SMART for ${device}: ${(err as Error).message}`);
@@ -118,9 +126,9 @@ export class SmartPlugin extends Plugin {
     return drives;
   }
 
-  private collectDrive(device: string): SmartDrive | null {
+  private async collectDrive(device: string): Promise<SmartDrive | null> {
     // Try JSON output first
-    const jsonOut = tryExec(`smartctl -a -j ${device} 2>/dev/null`);
+    const jsonOut = await tryExec(`smartctl -a -j ${device} 2>/dev/null`);
     if (jsonOut) {
       try {
         return this.parseSmartJson(device, JSON.parse(jsonOut));
@@ -128,7 +136,7 @@ export class SmartPlugin extends Plugin {
     }
 
     // Fallback: text output parsing
-    const textOut = tryExec(`smartctl -a ${device} 2>/dev/null`);
+    const textOut = await tryExec(`smartctl -a ${device} 2>/dev/null`);
     if (!textOut) return null;
 
     return this.parseSmartText(device, textOut);
@@ -158,7 +166,7 @@ export class SmartPlugin extends Plugin {
     if (data.ata_smart_attributes?.table) {
       for (const attr of data.ata_smart_attributes.table) {
         switch (attr.id) {
-          case 194: tempC = attr.value ?? null; break; // Temperature
+          case 194: tempC = attr.raw?.value ?? attr.value ?? null; break; // Temperature
           case 9: powerOnHours = attr.raw?.string ? Number(attr.raw.string) : attr.value; break; // Power-On Hours
           case 177: percentageUsed = attr.value ?? null; break; // Wear Leveling
         }

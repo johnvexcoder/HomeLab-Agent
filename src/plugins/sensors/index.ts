@@ -1,17 +1,28 @@
 import { hostPath } from "../../core/host.js";
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+const execAsync = promisify(exec);
 import { Plugin } from '../../core/plugin.js';
 import { observeThresholds } from '../../core/event-engine.js';
 import { log } from '../../core/logger.js';
 import type { PluginMeta, AgentEvent, CollectedMetrics } from '../../types/index.js';
 
 function tryRead(p: string): string {
-  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch (err: any) {
+    if (err.code !== 'ENOENT') log.warn('sensors', `tryRead failed for ${p}: ${err.message}`);
+    return '';
+  }
 }
 
-function tryExec(cmd: string): string {
-  try { return execSync(cmd, { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
+async function tryExec(cmd: string, timeout = 5000): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout });
+    return stdout.trim();
+  } catch (err: any) {
+    log.warn('sensors', `tryExec failed for "${cmd}": ${err.message}`);
+    return '';
+  }
 }
 
 function round(n: number, d: number): number {
@@ -51,16 +62,16 @@ export class SensorsPlugin extends Plugin {
     } catch {}
 
     // Check lm-sensors
-    const sensorsOut = tryExec('sensors -j 2>/dev/null');
+    const sensorsOut = await tryExec('sensors -j 2>/dev/null');
     if (sensorsOut && sensorsOut !== '{}') return true;
 
     return false;
   }
 
   async collect(): Promise<CollectedMetrics> {
-    const temps = this.collectTemperatures();
-    const fans = this.collectFans();
-    const voltages = this.collectVoltages();
+    const temps = await this.collectTemperatures();
+    const fans = await this.collectFans();
+    const voltages = await this.collectVoltages();
 
     return {
       temperatures: temps,
@@ -91,17 +102,17 @@ export class SensorsPlugin extends Plugin {
     return events;
   }
 
-  private collectTemperatures(): SensorReading[] {
+  private async collectTemperatures(): Promise<SensorReading[]> {
     // Try lm-sensors JSON output first
-    const readings = this.collectFromLmSensors();
+    const readings = await this.collectFromLmSensors();
     if (readings.length > 0) return readings;
 
     // Fallback to sysfs
     return this.collectFromSysfs();
   }
 
-  private collectFromLmSensors(): SensorReading[] {
-    const output = tryExec('sensors -j 2>/dev/null');
+  private async collectFromLmSensors(): Promise<SensorReading[]> {
+    const output = await tryExec('sensors -j 2>/dev/null');
     if (!output || output === '{}') return [];
 
     try {
@@ -115,7 +126,7 @@ export class SensorsPlugin extends Plugin {
 
           // Temperature inputs
           for (const [key, val] of Object.entries(sensorData)) {
-            if (key.endsWith('_input') && typeof val === 'number') {
+            if (key.endsWith('_input') && typeof val === 'number' && key.startsWith('temp')) {
               const suffix = key.replace('_input', '');
               readings.push({
                 chip,
@@ -168,8 +179,8 @@ export class SensorsPlugin extends Plugin {
     return readings;
   }
 
-  private collectFans(): SensorReading[] {
-    const output = tryExec('sensors -j 2>/dev/null');
+  private async collectFans(): Promise<SensorReading[]> {
+    const output = await tryExec('sensors -j 2>/dev/null');
     if (!output || output === '{}') return [];
 
     try {
@@ -198,8 +209,8 @@ export class SensorsPlugin extends Plugin {
     }
   }
 
-  private collectVoltages(): SensorReading[] {
-    const output = tryExec('sensors -j 2>/dev/null');
+  private async collectVoltages(): Promise<SensorReading[]> {
+    const output = await tryExec('sensors -j 2>/dev/null');
     if (!output || output === '{}') return [];
 
     try {

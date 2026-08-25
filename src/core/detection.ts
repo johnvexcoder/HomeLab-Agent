@@ -1,21 +1,27 @@
 import fs from 'node:fs';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+const execAsync = promisify(exec);
 import crypto from 'node:crypto';
 import type { HostInfo, HostType } from '../types/index.js';
 import { log } from './logger.js';
+import { hostPath } from './host.js';
 
 function tryRead(path: string): string {
-  try { return fs.readFileSync(path, 'utf-8').trim(); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(path), 'utf-8').trim(); } catch { return ''; }
 }
 
-function tryExec(cmd: string, timeout = 5000): string {
-  try { return execSync(cmd, { encoding: 'utf-8', timeout, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
+async function tryExec(cmd: string, timeout = 5000): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout });
+    return stdout.trim();
+  } catch { return ''; }
 }
 
-function detectVmId(): string {
+async function detectVmId(): Promise<string> {
   // Try QEMU guest agent command (if qemu-ga is installed)
-  const qgaVmId = tryExec('qemu-ga --get-vmid 2>/dev/null');
+  const qgaVmId = await tryExec('qemu-ga --get-vmid 2>/dev/null');
   if (qgaVmId && /^\d+$/.test(qgaVmId)) return qgaVmId;
 
   // Try QEMU guest agent via virtio serial port directly
@@ -25,7 +31,7 @@ function detectVmId(): string {
       if (fs.existsSync(port)) {
         // Send QGA command to get VMID
         const cmd = `echo '{"execute":"guest-get-vmid"}' > ${port} && timeout 2 cat ${port} 2>/dev/null`;
-        const result = tryExec(cmd);
+        const result = await tryExec(cmd);
         const match = result.match(/"vmid"\s*:\s*(\d+)/);
         if (match) return match[1];
       }
@@ -63,7 +69,7 @@ function detectVmId(): string {
   return '';
 }
 
-function detectParentIp(): string {
+async function detectParentIp(): Promise<string> {
   // For Proxmox VMs: the Proxmox host IP is often the DHCP server or gateway
   // Try to get from DHCP lease (the DHCP server IP is often the Proxmox host)
   try {
@@ -80,20 +86,20 @@ function detectParentIp(): string {
   } catch {}
 
   // Default gateway
-  const gw = tryExec("ip route show default 2>/dev/null | awk '{print $3}'");
+  const gw = await tryExec("ip route show default 2>/dev/null | awk '{print $3}'");
   if (gw) return gw;
 
   return '';
 }
 
-function detectHostType(): HostType {
+async function detectHostType(): Promise<HostType> {
   // Container detection
   if (fs.existsSync('/.dockerenv')) return 'container';
   const cgroup = tryRead('/proc/1/cgroup');
   if (cgroup.includes('docker') || cgroup.includes('kubepods') || cgroup.includes('lxc')) return 'container';
 
   // systemd-detect-virt (most reliable)
-  const virt = tryExec('systemd-detect-virt 2>/dev/null');
+  const virt = await tryExec('systemd-detect-virt 2>/dev/null');
   if (virt === 'none') {
     // Could be bare metal OR Proxmox host (which reports 'none')
     // Check for Proxmox-specific paths
@@ -114,8 +120,8 @@ function detectHostType(): HostType {
   return 'bare-metal';
 }
 
-function detectHypervisor(): string {
-  const virt = tryExec('systemd-detect-virt 2>/dev/null');
+async function detectHypervisor(): Promise<string> {
+  const virt = await tryExec('systemd-detect-virt 2>/dev/null');
   if (virt && virt !== 'none') return virt;
   if (fs.existsSync('/etc/pve')) return 'proxmox';
   const product = tryRead('/sys/class/dmi/id/product_name').toLowerCase();
@@ -149,7 +155,7 @@ function getMacAddress(): string {
   return '';
 }
 
-function getLocalIp(): string {
+async function getLocalIp(): Promise<string> {
   // Strategy 1: Node.js os.networkInterfaces()
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
@@ -162,18 +168,18 @@ function getLocalIp(): string {
   }
 
   // Strategy 2: ip route get 1.1.1.1 (most reliable)
-  const ipRoute = tryExec("ip route get 1.1.1.1 2>/dev/null | head -1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'");
+  const ipRoute = await tryExec("ip route get 1.1.1.1 2>/dev/null | head -1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'");
   if (ipRoute && /^\d+\.\d+\.\d+\.\d+$/.test(ipRoute)) return ipRoute;
 
   // Strategy 3: hostname -I (returns all IPs, take first)
-  const hostIps = tryExec('hostname -I 2>/dev/null');
+  const hostIps = await tryExec('hostname -I 2>/dev/null');
   if (hostIps) {
     const first = hostIps.split(/\s+/)[0];
     if (first && /^\d+\.\d+\.\d+\.\d+$/.test(first) && first !== '127.0.0.1') return first;
   }
 
   // Strategy 4: ip -4 addr (parse manually)
-  const ipAddr = tryExec("ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | head -1");
+  const ipAddr = await tryExec("ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | head -1");
   if (ipAddr && /^\d+\.\d+\.\d+\.\d+$/.test(ipAddr)) return ipAddr;
 
   return '127.0.0.1';
@@ -210,14 +216,14 @@ function getOsInfo(): { os: string; osId: string; osVersion: string } {
 export async function detectHost(hostId: string, hostName: string): Promise<HostInfo> {
   log.info('detect', 'Starting environment detection...');
 
-  const hostType = detectHostType();
-  const hypervisor = detectHypervisor();
-  const virtType = tryExec('systemd-detect-virt 2>/dev/null') || '';
+  const hostType = await detectHostType();
+  const hypervisor = await detectHypervisor();
+  const virtType = await tryExec('systemd-detect-virt 2>/dev/null') || '';
   const platform = detectPlatform();
   const { os: osName, osId, osVersion } = getOsInfo();
   const machineId = getMachineId();
-  const vmId = detectVmId();
-  const parentIp = detectParentIp();
+  const vmId = await detectVmId();
+  const parentIp = await detectParentIp();
 
   // DMI data
   const manufacturer = tryRead('/sys/class/dmi/id/board_vendor') || tryRead('/sys/class/dmi/id/sys_vendor');
@@ -229,7 +235,7 @@ export async function detectHost(hostId: string, hostName: string): Promise<Host
     hostName: hostName || os.hostname(),
     hostname: os.hostname(),
     machineId,
-    ip: getLocalIp(),
+    ip: await getLocalIp(),
     mac: getMacAddress(),
     os: osName,
     osId,

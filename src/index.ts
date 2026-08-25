@@ -1,6 +1,7 @@
 import { loadConfig } from './core/config.js';
 import { setLogLevel, log } from './core/logger.js';
 import { detectHost } from './core/detection.js';
+import { setHostRootPath } from './core/host.js';
 import { initPlugins } from './core/registry.js';
 import { Agent } from './core/agent.js';
 import { registerAllPlugins } from './plugins/index.js';
@@ -16,6 +17,7 @@ async function main() {
 `);
 
   const config = loadConfig();
+  setHostRootPath(config.hostRoot);
   setLogLevel(config.logLevel);
 
   log.info('main', `Dashboard: ${config.dashboardUrl}`);

@@ -1,7 +1,9 @@
 import { hostPath } from "../../core/host.js";
 import os from 'node:os';
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+const execAsync = promisify(exec);
 import { Plugin } from '../../core/plugin.js';
 import { observeThresholds } from '../../core/event-engine.js';
 import { log } from '../../core/logger.js';
@@ -15,11 +17,20 @@ let prevNetTx = 0;
 let prevNetTs = Date.now();
 
 function tryRead(p: string): string {
-  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch { return ''; }
+  try { return fs.readFileSync(hostPath(p), 'utf-8'); } catch (err: any) {
+    if (err.code !== 'ENOENT') log.warn('linux', `tryRead failed for ${p}: ${err.message}`);
+    return '';
+  }
 }
 
-function tryExec(cmd: string): string {
-  try { return execSync(cmd, { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; }
+async function tryExec(cmd: string, timeout = 5000): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout });
+    return stdout.trim();
+  } catch (err: any) {
+    log.warn('plugin', `tryExec failed for "${cmd}": ${err.message}`);
+    return '';
+  }
 }
 
 function round(n: number, d: number): number {
@@ -67,6 +78,28 @@ function readSwap(): { totalGb: number; usedGb: number; percent: number } {
   return {
     totalGb: round(total / 1e9, 2),
     usedGb: round(used / 1e9, 2),
+    percent: total > 0 ? round((used / total) * 100, 1) : 0,
+  };
+}
+
+function readMemory(): { totalGb: number; usedGb: number; freeGb: number; availableGb: number; percent: number } {
+  const meminfo = tryRead('/proc/meminfo');
+  const get = (key: string): number => {
+    const m = meminfo.match(new RegExp(`${key}:\\s+(\\d+)`));
+    // kB → bytes
+    return m ? Number(m[1]) * 1024 : 0;
+  };
+
+  const total = get('MemTotal');
+  const available = get('MemAvailable');
+  const free = get('MemFree');
+  const used = total - available; // Use available for used calculation, as per best practice
+
+  return {
+    totalGb: round(total / 1e9, 2),
+    usedGb: round(used / 1e9, 2),
+    freeGb: round(free / 1e9, 2),
+    availableGb: round(available / 1e9, 2),
     percent: total > 0 ? round((used / total) * 100, 1) : 0,
   };
 }
@@ -161,26 +194,26 @@ function getProcessCount(): number {
   }
 }
 
-function getLoggedInUsers(): number {
-  const output = tryExec('who 2>/dev/null');
+async function getLoggedInUsers(): Promise<number> {
+  const output = await tryExec('who 2>/dev/null');
   return output ? output.split('\n').filter(Boolean).length : 0;
 }
 
-function getPackageCount(): number {
+async function getPackageCount(): Promise<number> {
   // Try dpkg (Debian/Ubuntu)
-  let out = tryExec('dpkg -l 2>/dev/null | grep -c "^ii"');
+  let out = await tryExec('dpkg -l 2>/dev/null | grep -c "^ii"');
   if (out && Number(out) > 0) return Number(out);
   // Try rpm (Fedora/RHEL)
-  out = tryExec('rpm -qa 2>/dev/null | wc -l');
+  out = await tryExec('rpm -qa 2>/dev/null | wc -l');
   if (out && Number(out) > 0) return Number(out);
   // Try pacman (Arch)
-  out = tryExec('pacman -Q 2>/dev/null | wc -l');
+  out = await tryExec('pacman -Q 2>/dev/null | wc -l');
   if (out && Number(out) > 0) return Number(out);
   return 0;
 }
 
-function getRunningServices(): string[] {
-  const out = tryExec('systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null');
+async function getRunningServices(): Promise<string[]> {
+  const out = await tryExec('systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null');
   if (!out) return [];
   return out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[0]).slice(0, 50);
 }
@@ -205,9 +238,7 @@ export class LinuxPlugin extends Plugin {
   async collect(): Promise<CollectedMetrics> {
     const cpus = os.cpus();
     const cpuPercent = round(readCpuUsage(), 1);
-    const memTotal = os.totalmem();
-    const memFree = os.freemem();
-    const memUsed = memTotal - memFree;
+    const memory = readMemory();
     const swap = readSwap();
     const net = readNetworkCounters();
     const now = Date.now();
@@ -227,13 +258,7 @@ export class LinuxPlugin extends Plugin {
         model: cpus[0]?.model ?? 'unknown',
         speedMhz: cpus[0]?.speed ?? 0,
       },
-      memory: {
-        totalGb: round(memTotal / 1e9, 2),
-        usedGb: round(memUsed / 1e9, 2),
-        freeGb: round(memFree / 1e9, 2),
-        percent: round((memUsed / memTotal) * 100, 1),
-        availableGb: round(memFree / 1e9, 2),
-      },
+      memory,
       swap,
       load: {
         avg1: round(load[0], 2),
@@ -254,13 +279,13 @@ export class LinuxPlugin extends Plugin {
       uptime: Math.floor(os.uptime()),
       processes: {
         total: getProcessCount(),
-        users: getLoggedInUsers(),
+        users: await getLoggedInUsers(),
       },
       packages: {
-        count: getPackageCount(),
+        count: await getPackageCount(),
       },
       services: {
-        running: getRunningServices(),
+        running: await getRunningServices(),
       },
       system: {
         hostname: os.hostname(),

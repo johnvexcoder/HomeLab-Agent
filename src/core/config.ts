@@ -30,6 +30,12 @@ export function loadConfig(): AgentConfig {
     console.error('[config] DASHBOARD_URL is required');
     process.exit(1);
   }
+  if (dashboardUrl.startsWith('http://') && !dashboardUrl.includes('localhost') && !dashboardUrl.includes('127.0.0.1')) {
+    console.warn('\n================================================================');
+    console.warn('WARNING: AGENT CONNECTING TO DASHBOARD OVER INSECURE HTTP');
+    console.warn('Your X-Agent-Key will be transmitted in plaintext!');
+    console.warn('================================================================\n');
+  }
   if (!apiKey) {
     console.error('[config] API_KEY is required');
     process.exit(1);
