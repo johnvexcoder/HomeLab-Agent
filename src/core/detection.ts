@@ -189,13 +189,12 @@ function getMachineId(): string {
   // Prefer /etc/machine-id (systemd), fall back to /var/lib/dbus/machine-id
   let id = tryRead('/etc/machine-id');
   if (!id) id = tryRead('/var/lib/dbus/machine-id');
-  if (!id) {
-    // Generate a persistent ID based on hostname + MAC
-    const hostname = os.hostname();
-    const mac = getMacAddress();
-    id = crypto.createHash('sha256').update(`${hostname}:${mac}`).digest('hex').slice(0, 32);
-  }
-  return id;
+  
+  // Cloned VMs often share the same /etc/machine-id. 
+  // To guarantee uniqueness, always hash it with the hostname and MAC address.
+  const hostname = os.hostname();
+  const mac = getMacAddress();
+  return crypto.createHash('sha256').update(`${id || 'no-id'}:${hostname}:${mac}`).digest('hex').slice(0, 32);
 }
 
 function getOsInfo(): { os: string; osId: string; osVersion: string } {
