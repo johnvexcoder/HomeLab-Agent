@@ -106,7 +106,7 @@ function readMemory(): { totalGb: number; usedGb: number; freeGb: number; availa
 
 function readDiskUsage(mountPoint: string): { device: string; totalGb: number; usedGb: number; percent: number } {
   try {
-    const stat = fs.statfsSync(mountPoint);
+    const stat = fs.statfsSync(hostPath(mountPoint));
     const total = stat.blocks * stat.bsize;
     const free = stat.bavail * stat.bsize;
     const used = total - free;

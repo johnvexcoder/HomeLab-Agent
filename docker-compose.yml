@@ -10,9 +10,9 @@ services:
       - POLL_INTERVAL=10000
       - EVENT_CHECK_INTERVAL=5000
       - LOG_LEVEL=info
+      - HOST_ROOT=/host
     volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
+      - /:/host:ro,rslave
       - /var/run/docker.sock:/var/run/docker.sock:ro
     # For SMART monitoring, add:
     #   --device /dev/sda:/dev/sda

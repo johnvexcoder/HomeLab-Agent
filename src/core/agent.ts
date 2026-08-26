@@ -101,8 +101,20 @@ export class Agent {
 
       // Flush accumulated events
       if (this.pendingEvents.length > 0) {
-        const batch = this.pendingEvents.splice(0, this.config.maxEventsPerReport);
-        await reportEvents(this.config, this.hostInfo.hostId, batch);
+        // Peek at the batch without removing them yet
+        const batch = this.pendingEvents.slice(0, this.config.maxEventsPerReport);
+        const ok = await reportEvents(this.config, this.hostInfo.hostId, batch);
+        if (ok) {
+          // Success: remove acknowledged events
+          this.pendingEvents.splice(0, batch.length);
+        } else {
+          log.warn('events', `Failed to deliver ${batch.length} event(s), retaining in queue (size: ${this.pendingEvents.length})`);
+          // Ensure queue does not grow infinitely during a long outage
+          if (this.pendingEvents.length > 500) {
+            log.warn('events', 'Event queue exceeded maximum bounds, dropping oldest events');
+            this.pendingEvents = this.pendingEvents.slice(-500);
+          }
+        }
       }
     } catch (err) {
       log.error('events', `Event cycle failed: ${(err as Error).message}`);
