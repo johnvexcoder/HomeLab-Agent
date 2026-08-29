@@ -10,10 +10,10 @@ Collects host metrics, Docker containers, Proxmox VE node telemetry, hardware se
 
 **v2.0.0**
 
-[![Node](https://img.shields.io/badge/Node_20-TypeScript-34D399)](https://nodejs.org)
-[![Plugins](https://img.shields.io/badge/Plugin_Arch-6_Plugins-34D399)](src/plugins)
-[![Platform](https://img.shields.io/badge/Linux-Proxmox-Docker-34D399)](install.sh)
-[![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge&logo=gnu)](LICENSE)
+[![Node 20](https://img.shields.io/static/v1?style=for-the-badge&label=Node%2020&message=TypeScript&color=34D399)](https://nodejs.org)
+[![Plugins](https://img.shields.io/static/v1?style=for-the-badge&label=Plugins&message=6%20modular&color=34D399)](src/plugins)
+[![Platform](https://img.shields.io/static/v1?style=for-the-badge&label=Platform&message=Linux%20%7C%20Proxmox%20%7C%20Docker&color=34D399)](install.sh)
+[![License](https://img.shields.io/static/v1?style=for-the-badge&label=License&message=GPLv3&color=blue&logo=gnu&logoColor=white)](LICENSE)
 
 </div>
 
@@ -64,30 +64,38 @@ The agent and the Proxmox API are **not competitors**. They are two independent 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       HomeLab Agent Core                         │
-│                                                                  │
-│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐           │
-│  │ Registry │  │  Cache  │  │  Events  │  │   API   │           │
-│  │ (capab.) │  │ (shared)│  │ (state)  │  │ (REST)  │           │
-│  └────┬─────┘  └────┬────┘  └────┬─────┘  └────┬────┘           │
-│       │              │            │              │                │
-│  ┌────┴──────────────┴────────────┴──────────────┴────┐          │
-│  │              Per-Plugin Poll Scheduler              │          │
-│  │         (each plugin runs at its own interval)      │          │
-│  └────┬──────┬──────┬──────┬──────┬──────┬────────────┘          │
-│       │      │      │      │      │      │                       │
-│  ┌────┴──┐┌──┴───┐┌─┴──┐┌──┴───┐┌─┴──┐┌──┴───┐                  │
-│  │ Linux ││Docker││PVE ││Sensors││SMART││Network│                 │
-│  └───────┘└──────┘└────┘└──────┘└────┘└──────┘                  │
-└──────────────────────────────────────────────────────────────────┘
-          │
-          │  X-Agent-Key auth
-          ▼
-┌──────────────────────────┐
-│  HomeLab OS Backend       │
-│  (merges with Proxmox API)│
-└──────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                    HomeLab Agent                               │
+│      Agent Core  ·  TypeScript / Node 20                       │
+│                                                                │
+│   Registry (capabil.) · Shared cache · Event engine            │
+│   REST API  ·  X-Agent-Key auth  ·  single endpoint            │
+│                                                                │
+│            Per-Plugin Poll Scheduler                           │
+│        (each plugin runs at its own interval)                  │
+└────────────────────────────────────────────────────────────────┘
+
+                              │
+                              ▼
+
+┌────────────────────────────────────────────────────────────────┐
+│  Plugins · auto-detected, only active ones run                 │
+│  ├─ Linux    (1s)   cpu · mem · swap · fs · proc               │
+│  ├─ Docker   (5s)   containers · images                        │
+│  ├─ Proxmox (10s)   node telemetry · zfs · ceph                │
+│  ├─ Sensors  (5s)   temperature · fan · voltage                │
+│  ├─ SMART  (10min)  disk_health                                │
+│  └─ Network (5s)    ifaces · gw · dns · latency                │
+└────────────────────────────────────────────────────────────────┘
+
+                              │
+                          report ────►
+
+┌────────────────────────────────────────────────────────────────┐
+│              HomeLab OS Dashboard (backend)                    │
+│  merges Agent + Proxmox data into a unified model              │
+│  telemetry engine · history · alerts · WebSocket               │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ### Plugin System
@@ -424,8 +432,8 @@ The agent gracefully degrades — if a tool is missing, only that plugin is disa
 
 Built with care by **[John Vex Coder](https://github.com/johnvexcoder)** ✨
 
-[![GitHub](https://img.shields.io/badge/GitHub-@johnvexcoder-181717?style=for-the-badge&logo=github)](https://github.com/johnvexcoder)
-[![Ko-Fi](https://img.shields.io/badge/Support%20me-Ko--Fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/johnvexcoder)
+[![GitHub](https://img.shields.io/static/v1?style=for-the-badge&label=GitHub&message=@johnvexcoder&color=181717&logo=github&logoColor=white)](https://github.com/johnvexcoder)
+[![Ko-Fi](https://img.shields.io/static/v1?style=for-the-badge&label=Support%20me&message=Ko-Fi&color=FF5E5B&logo=kofi&logoColor=white)](https://ko-fi.com/johnvexcoder)
 
 **Part of the [HomeLab OS](https://github.com/johnvexcoder/HomeLab-OS) ecosystem** — the self-hosted infrastructure dashboard the agent feeds.
 
