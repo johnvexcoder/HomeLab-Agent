@@ -1,34 +1,49 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/johnvexcoder/HomeLab-OS/main/frontend/public/favicon.svg" width="72" alt="HomeLab OS icon" />
-</p>
+<div align="center">
 
-<h1 align="center">HomeLab Agent</h1>
+<img src="https://raw.githubusercontent.com/johnvexcoder/HomeLab-OS/main/frontend/public/favicon.svg" width="110" height="110" alt="HomeLab OS icon" />
 
-<p align="center">
-  A modular, plugin-based <b>system telemetry agent</b> for
-  <a href="https://github.com/johnvexcoder/HomeLab-OS">HomeLab OS</a>.
-  Collects host metrics, Docker containers, Proxmox VE node telemetry, hardware sensors,
-  SMART disk health, and network data — then reports securely to the HomeLab Dashboard.
-</p>
+# HomeLab Agent
 
-<p align="center">
-  <b>v2.0.0</b> ·
-  <img src="https://img.shields.io/badge/Node_20-TypeScript-34D399" alt="Node.js 20 · TypeScript" />
-  <img src="https://img.shields.io/badge/Plugin_Arch-6_Plugins-34D399" alt="Plugin Architecture · 6 Plugins" />
-  <img src="https://img.shields.io/badge/Linux-Proxmox-Docker-34D399" alt="Linux · Proxmox · Docker" />
-</p>
+**Modular, plugin-based system telemetry agent for [HomeLab OS](https://github.com/johnvexcoder/HomeLab-OS).**
+
+Collects host metrics, Docker containers, Proxmox VE node telemetry, hardware sensors, SMART disk health, and network data — then reports securely to the HomeLab Dashboard.
+
+**v2.0.0**
+
+[![Node](https://img.shields.io/badge/Node_20-TypeScript-34D399)](https://nodejs.org)
+[![Plugins](https://img.shields.io/badge/Plugin_Arch-6_Plugins-34D399)](src/plugins)
+[![Platform](https://img.shields.io/badge/Linux-Proxmox-Docker-34D399)](install.sh)
+[![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge&logo=gnu)](LICENSE)
+
+</div>
 
 ---
 
-## What It Does
+## Table of Contents
 
-HomeLab Agent runs on every host in your infrastructure and reports node-local telemetry
-that the **Proxmox API does not expose** — temperatures, fan speeds, SMART health, kernel
-information, local services, and more.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Plugin System](#plugin-system)
+- [Events](#events)
+- [Features](#features)
+- [Installation](#installation)
+- [Setup Guide](#setup-guide)
+- [Configuration](#configuration)
+- [Security](#security)
+- [Maintenance & Monitoring](#maintenance--monitoring)
+- [Adding a Plugin](#adding-a-plugin)
+- [Extending](#extending)
+- [Requirements](#requirements)
+- [Author & Credits](#author--credits)
+- [License](#license)
 
-The agent and the Proxmox API are **not competitors**. They are two independent data
-providers. The HomeLab OS backend merges data from both into a single unified model. The
-frontend never knows whether information came from the Proxmox API or the agent.
+---
+
+## Overview
+
+HomeLab Agent runs on every host in your infrastructure and reports **node-local telemetry** that the Proxmox API does **not** expose — temperatures, fan speeds, SMART health, kernel information, local services, and more.
+
+The agent and the Proxmox API are **not competitors**. They are two independent data providers. The HomeLab OS backend merges data from both into a single unified model. The frontend never knows whether information came from the Proxmox API or the agent.
 
 | Proxmox API (authoritative) | HomeLab Agent (enrichment) |
 |---|---|
@@ -77,9 +92,7 @@ frontend never knows whether information came from the Proxmox API or the agent.
 
 ### Plugin System
 
-Every feature is an independent plugin. Plugins **only** collect, normalize, and publish
-data. They never do HTTP, authentication, WebSocket, or network retries — those
-responsibilities belong exclusively to the Agent Core.
+Every feature is an independent plugin. Plugins **only** collect, normalize, and publish data. They never do HTTP, authentication, WebSocket, or network retries — those responsibilities belong exclusively to the **Agent Core**.
 
 | Plugin | Capabilities | Poll Interval |
 |--------|-------------|---------------|
@@ -92,10 +105,7 @@ responsibilities belong exclusively to the Agent Core.
 
 ### Capability-Based Design
 
-The backend requests data by **capability**, not by plugin. Each plugin declares which
-capabilities it provides. The agent core maps capabilities to plugins and serves cached
-data on demand. This decouples the agent's internal plugin structure from the backend's
-data model.
+The backend requests data by **capability**, not by plugin. Each plugin declares which capabilities it provides, and the Agent Core maps capabilities to plugins, serving cached data on demand. This decouples the agent's internal plugin structure from the backend's data model.
 
 ### Auto-Detection
 
@@ -106,11 +116,9 @@ The agent automatically detects its environment at startup — **zero configurat
 - **Platform:** Server, laptop, Raspberry Pi
 - **Services:** Docker, lm-sensors, smartctl — only active plugins run
 
-The same binary works everywhere.
-
 ### Per-Plugin Poll Scheduling
 
-Not everything runs every second. Each plugin defines its own polling interval:
+Not everything runs every second:
 
 - CPU, memory → **1 second**
 - Temperature, network → **5 seconds**
@@ -131,8 +139,7 @@ lm-sensors execution
   CPU  Temp  Alerts  Dashboard  Widgets
 ```
 
-No duplicated system calls. One `sensors -j` execution serves the temperature widget,
-the CPU card, the alerts engine, and the dashboard overview simultaneously.
+No duplicated system calls — one `sensors -j` execution serves the temperature widget, CPU card, alerts engine, and dashboard overview simultaneously.
 
 ---
 
@@ -180,7 +187,7 @@ The backend combines these with Proxmox events into a unified event timeline.
 
 ### Prerequisites
 
-- Node.js ≥ 18 (installer handles this automatically)
+- Node.js ≥ 18 (the installer handles this automatically)
 - Linux (any distribution)
 - Network access to the HomeLab OS backend (`http://<dashboard-ip>:4000/api`)
 
@@ -217,32 +224,24 @@ docker compose up -d
 4. Clones the agent to `/opt/homelab-agent`
 5. Builds TypeScript (`npm ci` + `npx tsc`)
 6. Creates `.env` with your dashboard URL and API key
-7. Creates and starts `homelab-agent` systemd service
+7. Creates and starts the `homelab-agent` systemd service
 
 ### Verifying Installation
 
 ```bash
-# Check service status
 sudo systemctl status homelab-agent
-
-# Watch live logs
 sudo journalctl -u homelab-agent -f
-
-# Check what capabilities are active
-curl -s http://localhost:4000/api/admin/agents -H "Authorization: Bearer YOUR_SESSION" | jq
 ```
 
-The agent appears in your dashboard within 10–15 seconds with status **online**.
+The agent appears in your dashboard within **10–15 seconds** with status **online**.
 
 ---
 
 ## Setup Guide
 
-### Step 1: Create Agent Entry in Dashboard
+### Step 1: Create an Agent Entry in the Dashboard
 
-Log into your HomeLab OS dashboard at `http://DASHBOARD_IP:3000`.
-
-Navigate to **Settings → Agents → New Agent** and create an entry for each host:
+Log into your HomeLab OS dashboard at `http://DASHBOARD_IP:3000`, navigate to **Settings → Agents → New Agent**:
 
 | Field | PVE0 Example | debian02 Example |
 |-------|-------------|-----------------|
@@ -251,7 +250,7 @@ Navigate to **Settings → Agents → New Agent** and create an entry for each h
 
 **Save the API key shown on screen.** It is only displayed once. Format: `hl_...`
 
-### Step 2: Install Agent on Each Host
+### Step 2: Install the Agent on Each Host
 
 ```bash
 # PVE0 (Proxmox)
@@ -271,8 +270,6 @@ sudo systemctl status homelab-agent
 sudo journalctl -u homelab-agent -f
 ```
 
-On the dashboard, the agent should appear within 10–15 seconds with status **online**.
-
 ### What Each Host Reports
 
 | Host | Plugins Active |
@@ -284,7 +281,7 @@ On the dashboard, the agent should appear within 10–15 seconds with status **o
 
 ## Configuration
 
-All configuration via environment variables (set in `.env` or systemd environment):
+All configuration happens via environment variables (set in `.env` or systemd environment):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -300,35 +297,41 @@ All configuration via environment variables (set in `.env` or systemd environmen
 
 ---
 
-## Project Structure
+## Security
 
+- **API key authentication** — every request uses the `X-Agent-Key` header
+- **One-way communication** — the agent only talks to the backend, never opens ports
+- **No inbound connections** — the agent is purely outbound
+- **Key rotation** — admins rotate keys from the dashboard; the old key stops working immediately
+- **No secrets in code** — the API key is stored in `.env` (mode `0600`) or environment variables
+- **Agent never does HTTP/auth/WebSocket** — only the Agent Core handles network communication
+
+---
+
+## Maintenance & Monitoring
+
+### Local build & run
+
+```bash
+npm install
+npm run build          # tsc → dist/
+npm run typecheck      # run the TypeScript type checker
+npm run dev            # run directly via tsx (no build step)
 ```
-├── src/
-│   ├── core/
-│   │   ├── agent.ts              Main agent orchestrator (poll + event loops)
-│   │   ├── plugin.ts             Abstract Plugin base class
-│   │   ├── registry.ts           Plugin discovery, capability mapping, scheduling
-│   │   ├── detection.ts          Environment auto-detection
-│   │   ├── event-engine.ts       State-change tracking & threshold events
-│   │   ├── config.ts             Configuration from environment variables
-│   │   ├── api.ts                REST communication with backend
-│   │   ├── cache.ts              Shared metric cache
-│   │   └── logger.ts             Structured logging
-│   ├── plugins/
-│   │   ├── linux/                CPU, memory, swap, disk, processes, packages, services
-│   │   ├── docker/               Containers, images, networks, volumes, compose
-│   │   ├── proxmox/              Node telemetry, ZFS, Ceph, UPS, hardware inventory
-│   │   ├── sensors/              Temperature, fans, voltages (lm-sensors / sysfs)
-│   │   ├── smart/                Drive health, temperature, life, power-on hours
-│   │   └── network/              Interfaces, gateway, DNS, public IP, latency
-│   ├── types/
-│   │   └── index.ts              Shared TypeScript interfaces & capabilities
-│   └── index.ts                  Entry point
-├── Dockerfile                    Multi-stage Node.js 20 build
-├── docker-compose.yml            Container deployment
-├── install.sh                    Native host installer (systemd)
-├── package.json                  v2.0.0
-└── tsconfig.json                 ES2022, NodeNext
+
+### Containerized deployment
+
+```bash
+docker compose up -d --build
+docker compose logs -f homelab-agent
+```
+
+Requires the host root and Docker socket mounted (see `docker-compose.yml`). For SMART monitoring, pass through block devices (`--device /dev/sda:/dev/sda`); for Proxmox API access, run the agent on the Proxmox host directly.
+
+### Checking active capabilities
+
+```bash
+curl -s http://localhost:4000/api/admin/agents -H "Authorization: Bearer YOUR_SESSION" | jq
 ```
 
 ---
@@ -380,7 +383,7 @@ registerPlugin(new MyPlugin());
 
 4. Add your capability to the `Capability` type union in `src/types/index.ts`
 
-That's it. The registry handles detection, scheduling, and caching automatically.
+That's it — the registry handles detection, scheduling, and caching automatically.
 
 ---
 
@@ -394,8 +397,7 @@ That's it. The registry handles detection, scheduling, and caching automatically
 
 ### Change polling intervals
 
-Edit `recommendedPollMs` and `recommendedEventMs` in your plugin's `meta`. The agent core
-respects per-plugin intervals — no global tick rate forces everything to run at the same speed.
+Edit `recommendedPollMs` and `recommendedEventMs` in your plugin's `meta`. The Agent Core respects per-plugin intervals — no global tick rate forces everything to run at the same speed.
 
 ### Custom event thresholds
 
@@ -405,17 +407,6 @@ Use `observeThresholds()` from `src/core/event-engine.ts`:
 events.push(...observeThresholds('linux', 'cpu_high', cpuPercent, '%', 80, 95));
 // Emits 'warning' at 80%, 'critical' at 95%
 ```
-
----
-
-## Security
-
-- **API key authentication** — every request uses `X-Agent-Key` header
-- **One-way communication** — agent only talks to the backend, never opens ports
-- **No inbound connections** — the agent is purely outbound
-- **Key rotation** — admin can rotate keys from the dashboard; old key stops working immediately
-- **No secrets in code** — API key is stored in `.env` (mode `0600`) or environment variables
-- **Agent never does HTTP/auth/WebSocket** — only the Agent Core handles network communication
 
 ---
 
@@ -429,24 +420,27 @@ The agent gracefully degrades — if a tool is missing, only that plugin is disa
 
 ---
 
-## License
+## Author & Credits
 
-MIT — do whatever you want with it.
+Built with care by **[John Vex Coder](https://github.com/johnvexcoder)** ✨
+
+[![GitHub](https://img.shields.io/badge/GitHub-@johnvexcoder-181717?style=for-the-badge&logo=github)](https://github.com/johnvexcoder)
+[![Ko-Fi](https://img.shields.io/badge/Support%20me-Ko--Fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/johnvexcoder)
+
+**Part of the [HomeLab OS](https://github.com/johnvexcoder/HomeLab-OS) ecosystem** — the self-hosted infrastructure dashboard the agent feeds.
 
 ---
 
-<p align="center">
-  <sub>v2.0.0 · HomeLab Agent</sub>
-  <br /><br />
-  <sub>
-    Author: <a href="https://github.com/johnvexcoder">John Vex Coder</a> :octocat:
-  </sub>
-  &nbsp;&nbsp;
-  <a href="https://ko-fi.com/johnvexcoder" target="_blank">
-    <img src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Support me on Ko-fi" height="28">
-  </a>
-  <br />
-  <sub>
-    Part of the <a href="https://github.com/johnvexcoder/HomeLab-OS">HomeLab OS</a> ecosystem
-  </sub>
-</p>
+## License
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0-or-later)**.
+
+You are free to use, modify, and distribute it, provided all derivative works are also distributed under the GPLv3.
+
+See the full text in the [LICENSE](LICENSE) file, or at [gnu.org/licenses/gpl-3.0.html](https://www.gnu.org/licenses/gpl-3.0.html).
+
+---
+
+<div align="center">
+<p>Made with ❤️ for self-hosters.</p>
+</div>
