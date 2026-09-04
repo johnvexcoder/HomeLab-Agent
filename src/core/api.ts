@@ -1,6 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import type { AgentConfig } from './config.js';
+import { currentApiKey, type AgentConfig } from './config.js';
 import type { AgentReport, AgentEvent } from '../types/index.js';
 import { log } from './logger.js';
 
@@ -38,7 +38,15 @@ function postJson(
       },
       (res) => {
         let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk; });
+        let responseBytes = 0;
+        res.on('data', (chunk: Buffer) => {
+          responseBytes += chunk.length;
+          if (responseBytes > 1024 * 1024) {
+            req.destroy(new Error('Response exceeded 1 MiB'));
+            return;
+          }
+          data += chunk;
+        });
         res.on('end', () => {
           resolve({ ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode ?? 0, body: data });
         });
@@ -65,7 +73,7 @@ export async function registerAgent(
   const url = `${config.dashboardUrl}/agent/register`;
   try {
     const res = await postJson(url, {
-      'X-Agent-Key': config.apiKey,
+      'X-Agent-Key': currentApiKey(config),
       'X-Agent-Version': report.agentVersion,
     }, {
       hostId: report.hostInfo.hostId,
@@ -103,7 +111,7 @@ export async function reportMetrics(
   const url = `${config.dashboardUrl}/agent/report`;
   try {
     const res = await postJson(url, {
-      'X-Agent-Key': config.apiKey,
+      'X-Agent-Key': currentApiKey(config),
       'X-Agent-Version': report.agentVersion,
     }, report);
     if (!res.ok) {
@@ -126,7 +134,7 @@ export async function reportEvents(
   const url = `${config.dashboardUrl}/agent/events`;
   try {
     const res = await postJson(url, {
-      'X-Agent-Key': config.apiKey,
+      'X-Agent-Key': currentApiKey(config),
     }, { hostId, events });
     return res.ok;
   } catch {

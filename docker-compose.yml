@@ -3,17 +3,40 @@ services:
     build: .
     container_name: homelab-agent
     restart: unless-stopped
+    init: true
     privileged: false
     environment:
-      - DASHBOARD_URL=http://192.168.1.31:4000/api
-      - API_KEY=your_api_key_here
+      - DASHBOARD_URL=${DASHBOARD_URL:?Set DASHBOARD_URL in .env}
+      - API_KEY_FILE=/run/secrets/agent_api_key
+      - ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}
       - POLL_INTERVAL=10000
       - EVENT_CHECK_INTERVAL=5000
       - LOG_LEVEL=info
       - HOST_ROOT=/host
+      - STATE_DIR=/var/lib/homelab-agent
+    secrets:
+      - agent_api_key
     volumes:
       - /:/host:ro,rslave
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - homelab-agent-state:/var/lib/homelab-agent
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    cpus: 1.0
     # For SMART monitoring, add:
     #   --device /dev/sda:/dev/sda
     # For Proxmox API access, ensure the agent runs on the Proxmox host directly
+
+secrets:
+  agent_api_key:
+    file: ${AGENT_API_KEY_FILE:-./secrets/agent-api-key}
+
+volumes:
+  homelab-agent-state:

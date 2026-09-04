@@ -10,7 +10,7 @@ Collects host metrics, Docker containers, Proxmox VE node telemetry, hardware se
 
 **v2.0.0**
 
-[![Node 20](https://img.shields.io/static/v1?style=for-the-badge&label=Node%2020&message=TypeScript&color=34D399)](https://nodejs.org)
+[![Node 24](https://img.shields.io/static/v1?style=for-the-badge&label=Node%2024%20LTS&message=TypeScript&color=34D399)](https://nodejs.org)
 [![Plugins](https://img.shields.io/static/v1?style=for-the-badge&label=Plugins&message=6%20modular&color=34D399)](src/plugins)
 [![Platform](https://img.shields.io/static/v1?style=for-the-badge&label=Platform&message=Linux%20%7C%20Proxmox%20%7C%20Docker&color=34D399)](install.sh)
 [![License](https://img.shields.io/static/v1?style=for-the-badge&label=License&message=GPLv3&color=blue&logo=gnu&logoColor=white)](LICENSE)
@@ -66,7 +66,7 @@ The agent and the Proxmox API are **not competitors**. They are two independent 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                    HomeLab Agent                               │
-│      Agent Core  ·  TypeScript / Node 20                       │
+│      Agent Core  ·  TypeScript / Node 24 LTS                   │
 │                                                                │
 │   Registry (capabil.) · Shared cache · Event engine            │
 │   REST API  ·  X-Agent-Key auth  ·  single endpoint            │
@@ -195,16 +195,16 @@ The backend combines these with Proxmox events into a unified event timeline.
 
 ### Prerequisites
 
-- Node.js ≥ 18 (the installer handles this automatically)
+- Node.js ≥ 24 (the installer handles this automatically)
 - Linux (any distribution)
-- Network access to the HomeLab OS backend (`http://<dashboard-ip>:4000/api`)
+- Network access to the HomeLab OS frontend proxy (`https://<dashboard-host>/api`, or explicit private-LAN HTTP)
 
 ### Quick Install (recommended)
 
 ```bash
 # On each host (PVE0, debian02, etc.)
-curl -fsSL https://raw.githubusercontent.com/johnvexcoder/HomeLab-Agent/main/install.sh | \
-  sudo bash -s -- --dashboard-url http://DASHBOARD_IP:4000/api --api-key YOUR_API_KEY
+sudo ./install.sh --dashboard-url https://DASHBOARD_HOST/api \
+  --api-key-file /secure/path/agent-api-key
 ```
 
 ### Manual Install
@@ -212,7 +212,8 @@ curl -fsSL https://raw.githubusercontent.com/johnvexcoder/HomeLab-Agent/main/ins
 ```bash
 git clone https://github.com/johnvexcoder/HomeLab-Agent.git /opt/homelab-agent
 cd /opt/homelab-agent
-sudo ./install.sh --dashboard-url http://DASHBOARD_IP:4000/api --api-key YOUR_API_KEY
+sudo ./install.sh --dashboard-url https://DASHBOARD_HOST/api \
+  --api-key-file /secure/path/agent-api-key
 ```
 
 ### Docker
@@ -228,7 +229,7 @@ docker compose up -d
 
 1. Detects your OS (Debian, Proxmox, Ubuntu, Fedora, Arch, Alpine)
 2. Installs prerequisites: `git`, `curl`, `lm-sensors`, `vnstat`, `smartmontools`
-3. Installs Node.js 20 if not present
+3. Installs Node.js 24 if not present
 4. Clones the agent to `/opt/homelab-agent`
 5. Builds TypeScript (`npm ci` + `npx tsc`)
 6. Creates `.env` with your dashboard URL and API key
@@ -263,12 +264,13 @@ Log into your HomeLab OS dashboard at `http://DASHBOARD_IP:3000`, navigate to **
 ```bash
 # PVE0 (Proxmox)
 ssh root@PVE0_IP
-curl -fsSL https://raw.githubusercontent.com/johnvexcoder/HomeLab-Agent/main/install.sh | \
-  sudo bash -s -- --dashboard-url http://192.168.1.31:4000/api --api-key hl_YOUR_KEY
+sudo ./install.sh --dashboard-url http://192.168.1.31:3000/api \
+  --api-key-file /secure/path/agent-api-key --allow-insecure-http
 
 # debian02
 ssh j0hn@debian02_IP
-sudo ./install.sh --dashboard-url http://192.168.1.31:4000/api --api-key hl_YOUR_KEY
+sudo ./install.sh --dashboard-url http://192.168.1.31:3000/api \
+  --api-key-file /secure/path/agent-api-key --allow-insecure-http
 ```
 
 ### Step 3: Verify
@@ -293,8 +295,11 @@ All configuration happens via environment variables (set in `.env` or systemd en
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DASHBOARD_URL` | *required* | Dashboard API URL (e.g. `http://192.168.1.31:4000/api`) |
-| `API_KEY` | *required* | Agent API key from Dashboard → Settings → Agents |
+| `DASHBOARD_URL` | *required* | Dashboard API URL (e.g. `https://homelab.home.arpa/api`) |
+| `API_KEY` | *required* | Direct agent key; prefer `API_KEY_FILE` in production |
+| `API_KEY_FILE` | empty | Root-readable secret file, re-read for every request to support rotation |
+| `ALLOW_INSECURE_HTTP` | `false` | Explicitly permit plaintext HTTP to a trusted private LAN |
+| `STATE_DIR` | `/var/lib/homelab-agent` | Durable pending-event queue directory |
 | `POLL_INTERVAL` | `10000` | Global fallback poll interval (ms) |
 | `EVENT_CHECK_INTERVAL` | `5000` | State-change check interval (ms) |
 | `HOST_ID` | auto | Override host identifier |
@@ -311,7 +316,9 @@ All configuration happens via environment variables (set in `.env` or systemd en
 - **One-way communication** — the agent only talks to the backend, never opens ports
 - **No inbound connections** — the agent is purely outbound
 - **Key rotation** — admins rotate keys from the dashboard; the old key stops working immediately
-- **No secrets in code** — the API key is stored in `.env` (mode `0600`) or environment variables
+- **No secrets in code** — production installs read the API key from a mode `0600` secret file
+- **Fail-closed transport** — non-loopback HTTP is refused unless explicitly allowed for a trusted LAN
+- **Durable delivery** — pending events survive agent restarts and use idempotent IDs
 - **Agent never does HTTP/auth/WebSocket** — only the Agent Core handles network communication
 
 ---
@@ -420,7 +427,7 @@ events.push(...observeThresholds('linux', 'cpu_high', cpuPercent, '%', 80, 95));
 
 ## Requirements
 
-- **Node.js** ≥ 18
+- **Node.js** ≥ 24
 - **Linux** (any distribution)
 - **Optional:** `lm-sensors` (temperature/fans), `smartctl` (SMART health), Docker (containers)
 

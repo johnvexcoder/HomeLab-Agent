@@ -198,7 +198,7 @@ export class SmartPlugin extends Plugin {
 
     let tempC: number | null = null;
     let powerOnHours: number | null = null;
-    let percentageUsed: number | null = null;
+    const percentageUsed: number | null = null;
 
     const tempMatch = text.match(/Temperature_Celsius\s+\d+\s+(\d+)/);
     if (tempMatch) tempC = Number(tempMatch[1]);

@@ -4,6 +4,7 @@ import { log } from './logger.js';
 import { cacheGetAll } from './cache.js';
 import { registerAgent, reportMetrics, reportEvents } from './api.js';
 import { collectDue, checkEventsDue, getCapabilities } from './registry.js';
+import { loadEventQueue, saveEventQueue } from './event-queue.js';
 
 const AGENT_VERSION = '2.0.0';
 
@@ -23,6 +24,10 @@ export class Agent {
   private eventTimer: ReturnType<typeof setInterval> | null = null;
   private pendingEvents: AgentEvent[] = [];
   private registered = false;
+  private pollRunning = false;
+  private eventRunning = false;
+  private reportFailures = 0;
+  private nextReportAt = 0;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -30,6 +35,10 @@ export class Agent {
 
   async start(hostInfo: HostInfo): Promise<void> {
     this.hostInfo = hostInfo;
+    this.pendingEvents = (await loadEventQueue(this.config.stateDir)).slice(-500);
+    if (this.pendingEvents.length > 0) {
+      log.info('events', `Recovered ${this.pendingEvents.length} queued event(s) from disk`);
+    }
 
     // Initial collection + registration
     const report = await this.buildReport();
@@ -58,6 +67,7 @@ export class Agent {
   async stop(): Promise<void> {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.eventTimer) clearInterval(this.eventTimer);
+    await saveEventQueue(this.config.stateDir, this.pendingEvents);
     log.info('agent', 'Agent stopped');
   }
 
@@ -67,6 +77,8 @@ export class Agent {
    * The shared cache is updated internally by the registry.
    */
   private async pollCycle(): Promise<void> {
+    if (this.pollRunning) return;
+    this.pollRunning = true;
     try {
       const freshlyCollected = await collectDue();
       if (freshlyCollected.length === 0) return; // no plugin was due
@@ -74,16 +86,25 @@ export class Agent {
       // Build a delta report — only freshly collected data
       const report = this.buildDeltaReport(freshlyCollected);
 
+      if (Date.now() < this.nextReportAt) return;
+
       if (!this.registered) {
         this.registered = await registerAgent(this.config, report);
       }
 
       const ok = await reportMetrics(this.config, report);
       if (ok) {
+        this.reportFailures = 0;
+        this.nextReportAt = 0;
         log.debug('agent', `Reported ${freshlyCollected.length} plugin(s): ${freshlyCollected.map((p) => p.plugin).join(', ')}`);
+      } else {
+        this.scheduleReportRetry();
       }
     } catch (err) {
+      this.scheduleReportRetry();
       log.error('agent', `Poll cycle failed: ${(err as Error).message}`);
+    } finally {
+      this.pollRunning = false;
     }
   }
 
@@ -92,10 +113,17 @@ export class Agent {
    * Events are accumulated and flushed periodically.
    */
   private async eventCycle(): Promise<void> {
+    if (this.eventRunning) return;
+    this.eventRunning = true;
     try {
       const events = await checkEventsDue();
       if (events.length > 0) {
         this.pendingEvents.push(...events);
+        if (this.pendingEvents.length > 500) {
+          log.warn('events', 'Event queue exceeded maximum bounds, dropping oldest events');
+          this.pendingEvents = this.pendingEvents.slice(-500);
+        }
+        await saveEventQueue(this.config.stateDir, this.pendingEvents);
         log.info('events', `${events.length} new event(s): ${events.map((e) => e.message).join('; ')}`);
       }
 
@@ -107,18 +135,25 @@ export class Agent {
         if (ok) {
           // Success: remove acknowledged events
           this.pendingEvents.splice(0, batch.length);
+          await saveEventQueue(this.config.stateDir, this.pendingEvents);
         } else {
           log.warn('events', `Failed to deliver ${batch.length} event(s), retaining in queue (size: ${this.pendingEvents.length})`);
           // Ensure queue does not grow infinitely during a long outage
-          if (this.pendingEvents.length > 500) {
-            log.warn('events', 'Event queue exceeded maximum bounds, dropping oldest events');
-            this.pendingEvents = this.pendingEvents.slice(-500);
-          }
         }
       }
     } catch (err) {
       log.error('events', `Event cycle failed: ${(err as Error).message}`);
+    } finally {
+      this.eventRunning = false;
     }
+  }
+
+  private scheduleReportRetry(): void {
+    this.reportFailures = Math.min(this.reportFailures + 1, 10);
+    const baseMs = Math.min(300_000, 1_000 * 2 ** (this.reportFailures - 1));
+    const jitterMs = Math.floor(Math.random() * Math.max(250, baseMs * 0.2));
+    this.nextReportAt = Date.now() + baseMs + jitterMs;
+    log.warn('agent', `Dashboard reporting paused for ${Math.ceil((baseMs + jitterMs) / 1000)}s after ${this.reportFailures} consecutive failure(s)`);
   }
 
   /**

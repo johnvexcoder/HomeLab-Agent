@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # HomeLab Agent Installer
-# Usage: sudo ./install.sh --dashboard-url http://IP:4000/api --api-key hl_xxxx
+# Usage: sudo ./install.sh --dashboard-url https://HOST/api --api-key-file /secure/path/agent-key
 #
 # This script:
 # 1. Detects the OS and installs prerequisites (lm-sensors, vnstat, smartmontools)
-# 2. Installs Node.js 20 if not present
+# 2. Installs Node.js 24 if not present
 # 3. Clones (or updates) the agent to /opt/homelab-agent
 # 4. Builds TypeScript
 # 5. Creates a systemd service that runs as root
@@ -14,22 +14,37 @@ set -euo pipefail
 INSTALL_DIR="/opt/homelab-agent"
 SERVICE_NAME="homelab-agent"
 REPO_URL="https://github.com/johnvexcoder/HomeLab-Agent.git"
-MIN_NODE_MAJOR=18
+MIN_NODE_MAJOR=24
 
 # ── Parse args ──
 DASHBOARD_URL=""
 API_KEY=""
+API_KEY_FILE=""
+ALLOW_INSECURE_HTTP="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dashboard-url) DASHBOARD_URL="$2"; shift 2 ;;
     --api-key)       API_KEY="$2"; shift 2 ;;
+    --api-key-file)  API_KEY_FILE="$2"; shift 2 ;;
+    --allow-insecure-http) ALLOW_INSECURE_HTTP="true"; shift ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
 
-if [[ -z "$DASHBOARD_URL" || -z "$API_KEY" ]]; then
-  echo "Usage: sudo ./install.sh --dashboard-url http://IP:4000/api --api-key hl_xxxx"
+if [[ -z "$DASHBOARD_URL" || ( -z "$API_KEY" && -z "$API_KEY_FILE" ) ]]; then
+  echo "Usage: sudo ./install.sh --dashboard-url https://HOST/api --api-key-file /secure/path/agent-key"
+  exit 1
+fi
+
+if [[ -n "$API_KEY_FILE" ]]; then
+  API_KEY_FILE=$(readlink -f "$API_KEY_FILE")
+  [[ -r "$API_KEY_FILE" ]] || { echo "[installer] ERROR: API key file is not readable"; exit 1; }
+  API_KEY=$(tr -d '\r\n' < "$API_KEY_FILE")
+fi
+
+if [[ "$DASHBOARD_URL" == http://* ]] && [[ "$DASHBOARD_URL" != http://localhost* ]] && [[ "$DASHBOARD_URL" != http://127.0.0.1* ]] && [[ "$ALLOW_INSECURE_HTTP" != "true" ]]; then
+  echo "[installer] ERROR: refusing plaintext HTTP. Use HTTPS or add --allow-insecure-http for a trusted LAN."
   exit 1
 fi
 
@@ -100,14 +115,14 @@ install_node() {
     echo "[installer] Node.js v$(node -v) is too old (need >= $MIN_NODE_MAJOR)"
   fi
 
-  echo "[installer] Installing Node.js 20..."
+  echo "[installer] Installing Node.js 24..."
   case "$OS_ID" in
     debian|ubuntu|linuxmint|pop|proxmox)
-      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
       apt-get install -y -qq nodejs
       ;;
     fedora|rhel|centos|rocky|alma)
-      curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+      curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
       dnf install -y nodejs
       ;;
     *)
@@ -119,7 +134,7 @@ install_node() {
         aarch64) ARCH="arm64" ;;
         armv7l)  ARCH="armv7l" ;;
       esac
-      local NODE_URL="https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-${ARCH}.tar.xz"
+      local NODE_URL="https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-${ARCH}.tar.xz"
       echo "[installer] Downloading Node.js binary..."
       curl -fsSL "$NODE_URL" | tar -xJ -C /usr/local --strip-components=1
       ;;
@@ -154,12 +169,19 @@ install_agent() {
 # ── Create systemd service ──
 create_service() {
   local ENV_FILE="$INSTALL_DIR/.env"
+  local CONFIG_DIR="/etc/homelab-agent"
+  local STATE_DIR="/var/lib/homelab-agent"
+  install -d -m 700 "$CONFIG_DIR" "$STATE_DIR"
+  printf '%s\n' "$API_KEY" > "$CONFIG_DIR/agent-api-key"
+  chmod 600 "$CONFIG_DIR/agent-api-key"
   cat > "$ENV_FILE" <<EOF
 DASHBOARD_URL=$DASHBOARD_URL
-API_KEY=$API_KEY
+API_KEY_FILE=$CONFIG_DIR/agent-api-key
+ALLOW_INSECURE_HTTP=$ALLOW_INSECURE_HTTP
 POLL_INTERVAL=10000
 EVENT_CHECK_INTERVAL=5000
 LOG_LEVEL=info
+STATE_DIR=$STATE_DIR
 EOF
   chmod 600 "$ENV_FILE"
 
@@ -168,6 +190,8 @@ EOF
 Description=HomeLab Agent
 After=network-online.target docker.service
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -179,6 +203,22 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=homelab-agent
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=$STATE_DIR
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
