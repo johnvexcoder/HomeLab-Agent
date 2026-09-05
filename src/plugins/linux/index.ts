@@ -218,6 +218,72 @@ async function getRunningServices(): Promise<string[]> {
   return out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[0]).slice(0, 50);
 }
 
+// ── System Tags ────────────────────────────────────────────────────────────
+// Each supported tag reports `installed` (binary present) and `running`
+// (an associated systemd unit is active). lm-sensors has no daemon — it counts
+// as "running" when the `sensors` command can read real readings.
+
+const TAG_BINS: Record<string, string[]> = {
+  dbus: ['dbus-daemon'],
+  docker: ['docker'],
+  'lm-sensors': ['sensors'],
+  ssh: ['sshd', 'ssh'],
+  containerd: ['containerd'],
+  networkmanager: ['NetworkManager'],
+};
+
+const TAG_UNITS: Record<string, string[]> = {
+  dbus: ['dbus.service', 'dbus.socket'],
+  docker: ['docker.service', 'docker.socket'],
+  ssh: ['ssh.service', 'sshd.service'],
+  containerd: ['containerd.service'],
+  networkmanager: ['NetworkManager.service', 'network-manager.service'],
+};
+
+const TAG_CACHE_TTL_MS = 30_000;
+let tagCache: Record<string, { installed: boolean; running: boolean }> | null = null;
+let tagCacheAt = 0;
+
+async function detectTags(): Promise<Record<string, { installed: boolean; running: boolean }>> {
+  const now = Date.now();
+  if (tagCache && now - tagCacheAt < TAG_CACHE_TTL_MS) return tagCache;
+
+  // Detect running units once; matches against TAG_UNITS.
+  const runningUnitsRaw = await tryExec('systemctl list-units --state=running --no-legend --no-pager 2>/dev/null');
+  const runningUnits = new Set(
+    runningUnitsRaw.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[0]),
+  );
+
+  const tags: Record<string, { installed: boolean; running: boolean }> = {};
+
+  for (const tag of Object.keys(TAG_BINS)) {
+    // installed: any of the binaries resolves
+    let installed = false;
+    for (const bin of TAG_BINS[tag]) {
+      if (await tryExec(`command -v ${bin} 2>/dev/null`)) { installed = true; break; }
+    }
+
+    // running: any unit active (or lm-sensors reads real data)
+    let running = false;
+    if (tag === 'lm-sensors') {
+      if (installed) {
+        const out = await tryExec('sensors -A 2>/dev/null');
+        running = /[°]C|^Adapter\b/im.test(out);
+      }
+    } else {
+      for (const unit of TAG_UNITS[tag] ?? []) {
+        if (runningUnits.has(unit) || runningUnits.has(`${unit}.service`)) { running = true; break; }
+      }
+    }
+
+    tags[tag] = { installed, running };
+  }
+
+  tagCache = tags;
+  tagCacheAt = now;
+  return tags;
+}
+
 export class LinuxPlugin extends Plugin {
   meta: PluginMeta = {
     id: 'linux',
@@ -287,6 +353,7 @@ export class LinuxPlugin extends Plugin {
       services: {
         running: await getRunningServices(),
       },
+      tags: await detectTags(),
       system: {
         hostname: os.hostname(),
         arch: os.arch(),
