@@ -1,7 +1,7 @@
 import { hostPath } from "../../core/host.js";
 import os from 'node:os';
 import fs from 'node:fs';
-import { exec } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 const execAsync = promisify(exec);
 import { Plugin } from '../../core/plugin.js';
@@ -219,9 +219,11 @@ async function getRunningServices(): Promise<string[]> {
 }
 
 // ── System Tags ────────────────────────────────────────────────────────────
-// Each supported tag reports `installed` (binary present) and `running`
-// (an associated systemd unit is active). lm-sensors has no daemon — it counts
-// as "running" when the `sensors` command can read real readings.
+// Each supported tag reports `installed` (binary present) and `running`.
+// Running state is detected by scanning the host's /proc for the daemon's
+// process name — this works even when the agent runs sandboxed / containerized
+// (systemctl cannot see the host's systemd in that case). lm-sensors has no
+// daemon — it counts as "running" when the `sensors` command can read readings.
 
 const TAG_BINS: Record<string, string[]> = {
   dbus: ['dbus-daemon'],
@@ -232,27 +234,52 @@ const TAG_BINS: Record<string, string[]> = {
   networkmanager: ['NetworkManager'],
 };
 
-const TAG_UNITS: Record<string, string[]> = {
-  dbus: ['dbus.service', 'dbus.socket'],
-  docker: ['docker.service', 'docker.socket'],
-  ssh: ['ssh.service', 'sshd.service'],
-  containerd: ['containerd.service'],
-  networkmanager: ['NetworkManager.service', 'network-manager.service'],
+/** Process-comm names that indicate the daemon is actually running. */
+const TAG_PROCESSES: Record<string, string[]> = {
+  dbus: ['dbus-daemon'],
+  docker: ['dockerd'],
+  'lm-sensors': [],
+  ssh: ['sshd'],
+  containerd: ['containerd'],
+  networkmanager: ['NetworkManager', 'networkmanager'],
 };
 
 const TAG_CACHE_TTL_MS = 30_000;
 let tagCache: Record<string, { installed: boolean; running: boolean }> | null = null;
 let tagCacheAt = 0;
 
+/** True when a process whose comm matches any of `names` exists on the host /proc. */
+function processRunning(names: string[]): boolean {
+  try {
+    const proc = hostPath('/proc');
+    const entries = fs.readdirSync(proc);
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const comm = fs.readFileSync(`${proc}/${entry}/comm`, 'utf-8').trim();
+        if (names.includes(comm)) return true;
+      } catch {
+        // PID vanished between readdir and readFile — skip
+      }
+    }
+  } catch {
+    // /proc unavailable — fall back to a pgrep-style check
+    for (const name of names) {
+      try {
+        execSync(`pgrep -x ${name}`, { stdio: 'ignore' });
+        return true;
+      } catch {
+        // no match — try next
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
 async function detectTags(): Promise<Record<string, { installed: boolean; running: boolean }>> {
   const now = Date.now();
   if (tagCache && now - tagCacheAt < TAG_CACHE_TTL_MS) return tagCache;
-
-  // Detect running units once; matches against TAG_UNITS.
-  const runningUnitsRaw = await tryExec('systemctl list-units --state=running --no-legend --no-pager 2>/dev/null');
-  const runningUnits = new Set(
-    runningUnitsRaw.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[0]),
-  );
 
   const tags: Record<string, { installed: boolean; running: boolean }> = {};
 
@@ -263,17 +290,15 @@ async function detectTags(): Promise<Record<string, { installed: boolean; runnin
       if (await tryExec(`command -v ${bin} 2>/dev/null`)) { installed = true; break; }
     }
 
-    // running: any unit active (or lm-sensors reads real data)
+    // running: the daemon process is present (or lm-sensors reads real data)
     let running = false;
     if (tag === 'lm-sensors') {
       if (installed) {
         const out = await tryExec('sensors -A 2>/dev/null');
         running = /[°]C|^Adapter\b/im.test(out);
       }
-    } else {
-      for (const unit of TAG_UNITS[tag] ?? []) {
-        if (runningUnits.has(unit) || runningUnits.has(`${unit}.service`)) { running = true; break; }
-      }
+    } else if (installed) {
+      running = processRunning(TAG_PROCESSES[tag] ?? []);
     }
 
     tags[tag] = { installed, running };
